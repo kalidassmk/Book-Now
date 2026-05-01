@@ -1,0 +1,22 @@
+# Node.js
+node_modules/
+dashboard/node_modules/
+
+# Python
+venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+**/.pytest_cache/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+backend.log
+dashboard.log
+
+# Java
+target/
+book-now-v3/target/

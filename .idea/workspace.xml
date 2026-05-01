@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="3131e7d4-2cbd-472b-8916-baa37778fb04" name="Changes" comment="commit">
+      <change afterPath="$PROJECT_DIR$/dashboard/public/SORTING_IMPLEMENTATION_COMPLETE.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/public/css/scanner-sort.css" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/public/js/SCANNER_SORT_GUIDE.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/public/js/SCANNER_SORT_QUICK_START.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/public/js/scanner-sort.js" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/ANALYSIS_SORT_GUIDE.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/CoinList.css" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/CoinList_FEATURES.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/CoinList_QUICK_REFERENCE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/backend.log" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/backend.log" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/agent/SentimentAgent.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/agent/SentimentAgent.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/config/RedisConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/config/RedisConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/consumer/MessageConsumer.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/consumer/MessageConsumer.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/controller/BookNowController.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/controller/BookNowController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/model/CurrentPrice.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/model/CurrentPrice.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/repository/BookNowRepository.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/repository/BookNowRepository.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/repository/BookNowRepositoryImpl.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/repository/BookNowRepositoryImpl.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/service/BookNowServiceImpl.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/service/BookNowServiceImpl.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/util/TradeExecutor.java" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/src/main/java/com/bogoai/booknow/util/TradeExecutor.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/agent/SentimentAgent.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/agent/SentimentAgent.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/config/RedisConfig.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/config/RedisConfig.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/consumer/MessageConsumer.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/consumer/MessageConsumer.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/controller/BookNowController.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/controller/BookNowController.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/model/CurrentPrice.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/model/CurrentPrice.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/repository/BookNowRepository.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/repository/BookNowRepository.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/repository/BookNowRepositoryImpl.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/repository/BookNowRepositoryImpl.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/service/BookNowServiceImpl.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/service/BookNowServiceImpl.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/util/TradeExecutor.class" beforeDir="false" afterPath="$PROJECT_DIR$/book-now-v3/target/classes/com/bogoai/booknow/util/TradeExecutor.class" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/public/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/public/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/public/js/main.js" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/public/js/main.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/public/js/scanner.js" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/public/js/scanner.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/server.js" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/server.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/CoinList.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/CoinList.jsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/src/components/AnalysisDashboard/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dashboard/src/pages/AnalysisDashboard.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/dashboard/src/pages/AnalysisDashboard.jsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/decision_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/decision_engine.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/redis_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/redis_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/scraper/news_scraper.py" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/scraper/news_scraper.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/news-analyzer/sentiment/sentiment_analyzer.py" beforeDir="false" afterPath="$PROJECT_DIR$/news-analyzer/sentiment/sentiment_analyzer.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_/Users/bogoai/Book-Now" value="3CtA1esCuZcZfIHtn0tsWKcUnVZ" />
+    </persistenceIdMap>
+  </component>
+  <component name="CopilotUserSelectedModel">
+    <selectedModels>
+      <entry key="agent-panel" value="GPT-4.1" />
+      <entry key="chat-panel" value="GPT-4.1" />
+    </selectedModels>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="ROOT_SYNC" value="DONT_SYNC" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 2
+}</component>
+  <component name="ProjectId" id="3CtA1esCuZcZfIHtn0tsWKcUnVZ" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/bogoai/Book-Now/news-analyzer&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/news-analyzer" />
+    </key>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="3131e7d4-2cbd-472b-8916-baa37778fb04" name="Changes" comment="" />
+      <created>1777194281449</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1777194281449</updated>
+    </task>
+    <task id="LOCAL-00001" summary="commit">
+      <option name="closed" value="true" />
+      <created>1777194389248</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1777194389248</updated>
+    </task>
+    <task id="LOCAL-00002" summary="commit">
+      <option name="closed" value="true" />
+      <created>1777251309468</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1777251309468</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
+    <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="commit" />
+    <option name="LAST_COMMIT_MESSAGE" value="commit" />
+  </component>
+  <component name="github-copilot-workspace">
+    <instructionFileLocations>
+      <option value=".github/instructions" />
+      <option value=".github/instructions" />
+    </instructionFileLocations>
+    <promptFileLocations>
+      <option value=".github/prompts" />
+    </promptFileLocations>
+  </component>
+</project>

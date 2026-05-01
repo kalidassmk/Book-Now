@@ -1,0 +1,364 @@
+/**
+ * AnalysisDashboard.css
+ * Styles for the Crypto News Analysis Debug Dashboard
+ */
+
+/* General Dashboard Styles */
+.analysis-dashboard {
+  min-height: 100vh;
+  background-color: #f8f9fa;
+}
+
+.dashboard-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 0;
+}
+
+.dashboard-title {
+  font-weight: 700;
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-title i {
+  margin-right: 10px;
+  animation: pulse-icon 2s infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Stats Bar */
+.stats-bar {
+  background-color: white;
+}
+
+.stat-item {
+  padding: 15px 10px;
+}
+
+.stat-number {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #6c757d;
+  margin-top: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Coin List */
+.coin-list-card {
+  border-left: 4px solid #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.coin-list {
+  scrollbar-width: thin;
+  scrollbar-color: #667eea rgba(0, 0, 0, 0.1);
+}
+
+.coin-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.coin-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.coin-list::-webkit-scrollbar-thumb {
+  background: #667eea;
+  border-radius: 3px;
+}
+
+.coin-list-item {
+  padding: 1rem;
+  border-left: 4px solid transparent;
+  transition: all 0.3s ease;
+}
+
+.coin-list-item:hover {
+  background-color: #f8f9fa;
+  border-left-color: #667eea;
+}
+
+.coin-list-item.active {
+  background-color: #e7e9f5;
+  border-left-color: #667eea;
+  font-weight: 600;
+}
+
+.coin-name {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Summary Cards */
+.summary-card {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  height: 100%;
+}
+
+.summary-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.summary-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.5rem;
+}
+
+.summary-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+/* Scoring Breakdown */
+.scoring-breakdown {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #dee2e6;
+}
+
+.breakdown-row:last-child {
+  border-bottom: none;
+}
+
+.breakdown-row.fw-bold {
+  background-color: #e7e9f5;
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin-top: 0.5rem;
+}
+
+.breakdown-label {
+  font-weight: 600;
+  min-width: 200px;
+}
+
+.breakdown-value {
+  text-align: right;
+  font-weight: 600;
+}
+
+.value-number {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.value-calc {
+  color: #6c757d;
+  font-size: 0.9rem;
+}
+
+/* Article Items */
+.article-item {
+  border: 1px solid #dee2e6;
+  margin-bottom: 0.5rem;
+  border-radius: 6px;
+}
+
+.article-header {
+  padding: 1rem;
+  background-color: #f8f9fa;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.article-header:hover {
+  background-color: #e9ecef;
+}
+
+.article-header:not(.collapsed) {
+  background-color: #e7e9f5;
+  font-weight: 600;
+}
+
+.article-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: #212529;
+}
+
+.article-body {
+  padding: 1.5rem;
+}
+
+.score-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detail-item {
+  margin-bottom: 0.75rem;
+}
+
+/* Debug Panel */
+.debug-panel {
+  margin-top: 2rem;
+  border: 2px solid #dc3545;
+}
+
+.debug-section {
+  padding: 1rem;
+}
+
+.debug-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Buttons and Links */
+.btn-sm {
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+/* Tables and Lists */
+table {
+  font-size: 0.9rem;
+}
+
+.table-hover tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+/* Badges */
+.badge {
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* Responsive Design */
+@media (max-width: 991px) {
+  .dashboard-title {
+    font-size: 1.5rem;
+  }
+
+  .coin-list-column {
+    margin-bottom: 2rem;
+  }
+
+  .col-title,
+  .col-scores {
+    margin-bottom: 0.5rem;
+  }
+
+  .score-badges {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 768px) {
+  .summary-card {
+    margin-bottom: 0.5rem;
+  }
+
+  .summary-value {
+    font-size: 1.5rem;
+  }
+
+  .stat-number {
+    font-size: 1.5rem;
+  }
+
+  .breakdown-label {
+    min-width: auto;
+    margin-bottom: 0.5rem;
+  }
+
+  .breakdown-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .breakdown-value {
+    text-align: left;
+    margin-top: 0.5rem;
+  }
+}
+
+/* Loading States */
+.spinner-border {
+  color: #667eea;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Accessibility */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Progress Bar Customization */
+.progress {
+  height: 8px;
+  border-radius: 4px;
+  background-color: #e9ecef;
+}
+
+.progress-bar {
+  border-radius: 4px;
+}
+

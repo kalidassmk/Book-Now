@@ -1,0 +1,17 @@
+package com.bogoai.api.client.domain.general;
+
+import com.fasterxml.jackson.annotation.JsonEnumDefaultValue;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+/**
+ * Rate limiters.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public enum RateLimitType {
+  REQUEST_WEIGHT,
+  ORDERS,
+  RAW_REQUESTS,
+
+  @JsonEnumDefaultValue
+  UNKNOWN
+}

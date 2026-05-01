@@ -1,0 +1,329 @@
+/**
+ * CoinList.css
+ * Elite Trading Radar Table Styling
+ */
+
+.coin-list-card {
+  border-radius: 0;
+  overflow: hidden;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.coin-list-card .card-header {
+  padding: 1rem;
+  border-bottom: 2px solid rgba(108, 117, 125, 0.3);
+  background: linear-gradient(135deg, rgba(33, 37, 41, 0.8) 0%, rgba(52, 58, 64, 0.8) 100%);
+}
+
+.coin-list-card .card-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.coin-list-card .card-footer {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(108, 117, 125, 0.3);
+}
+
+/* Table Styling */
+.custom-trading-table {
+  margin-bottom: 0;
+  font-size: 0.85rem;
+}
+
+.custom-trading-table thead {
+  background: rgba(33, 37, 41, 0.95);
+  border-bottom: 2px solid rgba(108, 117, 125, 0.5);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.custom-trading-table thead th {
+  padding: 0.75rem 0.5rem;
+  border-right: 1px solid rgba(108, 117, 125, 0.2);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+
+.custom-trading-table thead th:hover {
+  background: rgba(108, 117, 125, 0.2);
+  color: #17a2b8;
+}
+
+.custom-trading-table thead th:last-child {
+  border-right: none;
+}
+
+/* Rows */
+.custom-trading-table tbody tr {
+  border-bottom: 1px solid rgba(108, 117, 125, 0.1);
+  transition: all 0.15s ease;
+}
+
+.custom-trading-table tbody tr:hover {
+  background: rgba(108, 117, 125, 0.1) !important;
+  transform: scaleX(1.01);
+  box-shadow: inset 0 0 10px rgba(23, 162, 184, 0.1);
+}
+
+.custom-trading-table tbody tr.bg-secondary {
+  background: rgba(108, 117, 125, 0.3) !important;
+  border-left: 3px solid #17a2b8;
+}
+
+.custom-trading-table tbody td {
+  padding: 0.6rem 0.5rem;
+  vertical-align: middle;
+  border-right: 1px solid rgba(108, 117, 125, 0.05);
+}
+
+.custom-trading-table tbody td:last-child {
+  border-right: none;
+}
+
+/* Badge Styling */
+.custom-trading-table .badge {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+/* Scrollbar Styling */
+.btn-binance-logo:hover {
+  background-color: #f0b90b !important;
+  color: #000 !important;
+  box-shadow: 0 0 10px rgba(240, 185, 11, 0.4);
+}
+
+.table-responsive {
+  scroll-behavior: smooth;
+}
+
+.table-responsive::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.table-responsive::-webkit-scrollbar-track {
+  background: rgba(108, 117, 125, 0.1);
+}
+
+.table-responsive::-webkit-scrollbar-thumb {
+  background: rgba(108, 117, 125, 0.4);
+  border-radius: 4px;
+}
+
+.table-responsive::-webkit-scrollbar-thumb:hover {
+  background: rgba(108, 117, 125, 0.6);
+}
+
+/* Filter Controls */
+.coin-list-card .input-group {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.coin-list-card .input-group .form-control {
+  border-radius: 0;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.coin-list-card .form-select {
+  border-radius: 4px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+}
+
+.coin-list-card .form-select:focus {
+  border-color: #17a2b8;
+  box-shadow: 0 0 0 0.2rem rgba(23, 162, 184, 0.25);
+}
+
+/* Buttons */
+.coin-list-card .btn {
+  border-radius: 4px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  transition: all 0.2s ease;
+}
+
+.coin-list-card .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.coin-list-card .btn-outline-secondary {
+  color: #6c757d;
+  border-color: #6c757d;
+}
+
+.coin-list-card .btn-outline-secondary:hover {
+  color: #fff;
+  background: #6c757d;
+}
+
+/* Column Filter Checkbox */
+.coin-list-card .form-check {
+  white-space: nowrap;
+}
+
+.coin-list-card .form-check-input {
+  cursor: pointer;
+  background: rgba(108, 117, 125, 0.2);
+  border: 1px solid rgba(108, 117, 125, 0.5);
+  transition: all 0.2s ease;
+}
+
+.coin-list-card .form-check-input:checked {
+  background: #17a2b8;
+  border-color: #17a2b8;
+}
+
+.coin-list-card .form-check-label {
+  cursor: pointer;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+  .custom-trading-table {
+    font-size: 0.75rem;
+  }
+
+  .custom-trading-table thead th {
+    padding: 0.5rem 0.25rem;
+    font-size: 0.65rem;
+  }
+
+  .custom-trading-table tbody td {
+    padding: 0.4rem 0.25rem;
+  }
+
+  .coin-list-card .card-header {
+    padding: 0.75rem;
+  }
+}
+
+/* Animation Classes */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.custom-trading-table tbody tr {
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes pulse-signal {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.badge {
+  animation: pulse-signal 2s ease-in-out infinite;
+}
+
+/* Text utilities */
+.cursor-pointer {
+  cursor: pointer;
+}
+
+/* Signal colors */
+.signal-buy {
+  color: #4cff4c;
+  border-color: #1a6b1a;
+}
+
+.signal-sell {
+  color: #ff4d4d;
+  border-color: #6b1a1a;
+}
+
+.signal-hold {
+  color: #cccccc;
+  border-color: #4d4d4d;
+}
+
+/* Sentiment colors */
+.sentiment-highly-bullish {
+  color: #66ff66;
+  background: rgba(0, 77, 0, 0.5);
+  border: 1px solid rgba(102, 255, 102, 0.3);
+}
+
+.sentiment-bullish {
+  color: #99ff99;
+  background: rgba(26, 102, 26, 0.5);
+  border: 1px solid rgba(153, 255, 153, 0.3);
+}
+
+.sentiment-neutral {
+  color: #ffff99;
+  background: rgba(77, 77, 0, 0.5);
+  border: 1px solid rgba(255, 255, 153, 0.3);
+}
+
+.sentiment-bearish {
+  color: #ff9999;
+  background: rgba(102, 26, 26, 0.5);
+  border: 1px solid rgba(255, 153, 153, 0.3);
+}
+
+.sentiment-highly-bearish {
+  color: #ff4d4d;
+  background: rgba(58, 0, 0, 0.5);
+  border: 1px solid rgba(255, 77, 77, 0.3);
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 300px;
+  color: #6c757d;
+  font-size: 1.1rem;
+}
+
+/* Loading animation */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.loading {
+  background: linear-gradient(90deg, rgba(108, 117, 125, 0.1) 0%, rgba(108, 117, 125, 0.3) 50%, rgba(108, 117, 125, 0.1) 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite;
+}
+
