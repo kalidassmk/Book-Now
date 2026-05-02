@@ -76,7 +76,7 @@ public class BinanceFilterService {
             return rule;
         }
 
-        log.warn("[FilterService] [CACHE_MISS] [{}] Fetching on-demand...", symbol);
+        log.debug("[FilterService] [CACHE_MISS] [{}] Fetching on-demand...", symbol);
         try {
             ExchangeInfo info = prodBinanceApiARestClient.getExchangeInfo();
             if (info != null && info.getSymbols() != null) {
@@ -84,7 +84,7 @@ public class BinanceFilterService {
                     if (s.getSymbol().equals(symbol)) {
                         rule = extractRule(s);
                         saveToRedis(symbol, rule);
-                        log.info("[FilterService] [ON_DEMAND_SUCCESS] [{}] Cached successfully", symbol);
+                        log.debug("[FilterService] [ON_DEMAND_SUCCESS] [{}] Cached successfully", symbol);
                         return rule;
                     }
                 }

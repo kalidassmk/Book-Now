@@ -62,34 +62,60 @@ public class BookNowController {
     /**
      * Manual sell from the dashboard.
      * Reads the live price from Redis, then delegates to TradeExecutor.trySell()
-     * which records the sell, removes the BUY hash entry, and clears in-memory state.
      *
      * @param symbol  e.g. "SOLUSDT"
+     * @param qty     optional quantity to sell
      */
     @GetMapping("/sell/{symbol}")
-    public ResponseEntity<String> manualSell(@PathVariable String symbol) {
+    public ResponseEntity<String> manualSell(
+            @PathVariable String symbol,
+            @RequestParam(required = false) Double qty) {
         Map<String, CurrentPrice> prices = repository.getAllCurrentPrice(CURRENT_PRICE);
         CurrentPrice cp = prices.get(symbol);
         if (cp == null) {
             return ResponseEntity.badRequest()
                 .body("No live price found for " + symbol + ". Is the pipeline running?");
         }
-        tradeExecutor.trySell(symbol, cp, "MANUAL_DASHBOARD");
+        tradeExecutor.tryManualSell(symbol, cp, qty, "MANUAL_DASHBOARD");
         return ResponseEntity.ok("Sell executed for " + symbol + " @ " + cp.getPrice());
+    }
+
+    /**
+     * Manual market-buy from the dashboard.
+     *
+     * @param symbol  coin pair, e.g. "SOLUSDT"
+     * @param qty     quantity to buy
+     */
+    @GetMapping("/order/buy/{symbol}")
+    public ResponseEntity<?> manualMarketBuy(
+            @PathVariable String symbol,
+            @RequestParam double qty) {
+
+        Map<String, CurrentPrice> prices = repository.getAllCurrentPrice(CURRENT_PRICE);
+        CurrentPrice cp = prices.get(symbol);
+        if (cp == null) {
+            return ResponseEntity.badRequest()
+                .body("No live price for " + symbol + ". Is the pipeline running?");
+        }
+        com.bogoai.api.client.domain.account.NewOrderResponse resp = tradeExecutor.tryManualMarketBuy(symbol, cp, qty);
+        if (resp == null) {
+            return ResponseEntity.badRequest().body("Failed to place market order.");
+        }
+        return ResponseEntity.ok(resp);
     }
 
     /**
      * Manual limit-buy + immediate limit-sell from the dashboard.
      *
-     * Example: GET /api/v1/order/limit-buy/SOLUSDT?offsetPct=0.3&profitPct=2.0
-     *
      * @param symbol    coin pair, e.g. "SOLUSDT"
-     * @param offsetPct % below current price for the buy order  (default 0.3)
-     * @param profitPct % above buy price for the sell order     (default 2.0)
+     * @param qty       quantity to buy
+     * @param offsetPct % below current price for the buy order
+     * @param profitPct % above buy price for the sell order
      */
     @GetMapping("/order/limit-buy/{symbol}")
     public ResponseEntity<?> manualLimitBuy(
             @PathVariable String symbol,
+            @RequestParam(defaultValue = "0") double qty,
             @RequestParam(defaultValue = "0.3") double offsetPct,
             @RequestParam(defaultValue = "2.0") double profitPct) {
 
@@ -99,9 +125,9 @@ public class BookNowController {
             return ResponseEntity.badRequest()
                 .body("No live price for " + symbol + ". Is the pipeline running?");
         }
-        com.bogoai.api.client.domain.account.NewOrderResponse resp = tradeExecutor.tryManualLimitBuy(symbol, cp, offsetPct, profitPct);
+        com.bogoai.api.client.domain.account.NewOrderResponse resp = tradeExecutor.tryManualLimitBuy(symbol, cp, qty, offsetPct, profitPct);
         if (resp == null) {
-            return ResponseEntity.badRequest().body("Failed to place limit order. Check if already bought or API errors.");
+            return ResponseEntity.badRequest().body("Failed to place limit order.");
         }
         return ResponseEntity.ok(resp);
     }

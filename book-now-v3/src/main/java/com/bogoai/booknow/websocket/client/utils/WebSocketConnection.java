@@ -45,10 +45,10 @@ public class WebSocketConnection extends WebSocketListener {
     public void connect() {
         synchronized (mutex) {
             if (null == webSocket) {
-                logger.info("[Connection {}] Connecting to {}", connectionId, streamName);
+                logger.debug("[Connection {}] Connecting to {}", connectionId, streamName);
                 webSocket = client.newWebSocket(request, this);
             } else {
-                logger.info("[Connection {}] is already connected to {}", connectionId, streamName);
+                logger.debug("[Connection {}] is already connected to {}", connectionId, streamName);
             }
         }
     }
@@ -60,14 +60,14 @@ public class WebSocketConnection extends WebSocketListener {
 
     public void close() {
         if (null != webSocket) {
-            logger.info("[Connection {}] Closing connection to {}", connectionId, streamName);
+            logger.debug("[Connection {}] Closing connection to {}", connectionId, streamName);
             webSocket.close(NORMAL_CLOSURE_STATUS, null);
         }
     }
 
     @Override
     public void onOpen(WebSocket ws, Response response) {
-        logger.info("[Connection {}] Connected to Server", connectionId);
+        logger.debug("[Connection {}] Connected to Server", connectionId);
         onOpenCallback.onReceive(null);
     }
 

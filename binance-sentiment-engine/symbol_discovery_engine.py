@@ -403,9 +403,11 @@ class SymbolDiscoveryEngine:
                  "Symbol", "Rank", "24h Vol (USDT)", "Trades", "Score")
         log.info("   " + "─" * 65)
         for rec in ranked[:10]:
-            log.info("   %-14s  %6d  %20,.0f  %10,d  %8.2f",
-                     rec["symbol"], rec["rank"], rec["quote_volume"],
-                     rec["trade_count"], rec["score"])
+            log.info("   %-14s  %6d  %20s  %10s  %8.2f",
+                     rec["symbol"], rec["rank"], 
+                     f"{rec['quote_volume']:,.0f}",
+                     f"{rec['trade_count']:,d}",
+                     rec["score"])
 
 
 # ── Redis Helper (imported by all other algorithms) ────────────────────────

@@ -175,7 +175,10 @@ class AdaptiveMarketEngine:
 
             # Store in Redis
             self.r.set(f"sentiment:market:adaptive:{self.symbol}", json.dumps(result))
-            logger.info(f"🧠 [{regime}] {self.symbol}: {status} (Score: {final_score:.2f} | Conf: {confidence}%)")
+            
+            # Only log Strong signals to console to keep it clean
+            if "Strong" in status:
+                logger.info(f"🧠 [{regime}] {self.symbol}: {status} (Score: {final_score:.2f} | Conf: {confidence}%)")
             return result
 
         except Exception as e:

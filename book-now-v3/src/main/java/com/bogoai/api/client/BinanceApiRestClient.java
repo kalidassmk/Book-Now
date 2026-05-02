@@ -300,6 +300,8 @@ public interface BinanceApiRestClient {
 
 
   UniversalTransferResult universalTransfer(String asset, UniversalTransferType type, String amount);
+  
+  Object dustTransfer(List<String> asset);
 
   /**
    * Retrieves all order lists (OCO).

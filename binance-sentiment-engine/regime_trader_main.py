@@ -63,9 +63,23 @@ Examples:
     args = parser.parse_args()
 
     # Validate live mode requirements
-    if args.live and (not args.api_key or not args.api_secret):
-        log.error("❌ Live trading requires --api-key and --api-secret (or BINANCE_API_KEY/BINANCE_SECRET_KEY env vars)")
-        sys.exit(1)
+    if args.live:
+        # Load API keys (Prioritize Redis, fallback to ENV)
+        import redis
+        try:
+            r = redis.Redis(host=args.redis_host, port=args.redis_port, decode_responses=True)
+            redis_key = r.get("BINANCE_API_KEY")
+            redis_secret = r.get("BINANCE_SECRET_KEY")
+            if redis_key and redis_secret:
+                args.api_key = redis_key
+                args.api_secret = redis_secret
+                log.info("🛡️ API Credentials loaded from Redis.")
+        except Exception as e:
+            log.warning(f"⚠️ Could not load keys from Redis: {e}")
+
+        if not args.api_key or not args.api_secret:
+            log.error("❌ Live trading requires API keys. Please set them in the Dashboard or as ENV vars.")
+            sys.exit(1)
 
     # Create engine
     from regime_trader import RegimeTraderEngine

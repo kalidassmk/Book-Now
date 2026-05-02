@@ -56,6 +56,9 @@ public interface Constant {
     String SELL_KEY = "SELL";   // Hash: symbol → SellRecord (JSON)
 
 
+    // ── Configuration ───────────────────────────────────────────────────────
+    String TRADING_CONFIG = "TRADING_CONFIG";
+
     // ── Trade defaults (override via application.properties) ─────────────────
     double BUY_AMOUNT_USDT = 12.0;
 

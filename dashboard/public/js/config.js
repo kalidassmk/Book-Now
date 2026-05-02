@@ -1,60 +1,72 @@
 /**
  * public/js/config.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Auto-trade configuration form handler.
- *
- * Responsibilities:
- *   - Apply incoming config (from socket) to HTML form fields
- *   - Read form values and POST to /api/config when any field changes
- *   - Update the mode badge (SIM / LIVE) and stats display on change
+ * Master Dynamic Trading Configuration Handler.
+ * This script syncs the Dashboard UI with the Redis-backed Spring Bot config.
  */
-
-// ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Apply a config object received from the server to the HTML form.
- * Called on socket 'config' event.
- *
- * @param {object} cfg  Full autoConfig from server
+ * Fetch the master config from Redis on load and apply to UI.
  */
-function applyConfig(cfg) {
-    _el('ck-auto').checked   = cfg.enabled;
-    _el('cfg-profit').value  = cfg.profitPct;
-    _el('cfg-stop').value    = cfg.stopLossPct;
-    _el('cfg-maxpos').value  = cfg.maxPositions;
-    _el('cfg-limit').value   = cfg.displayLimit || 10;
-    _el('ck-live').checked   = !cfg.simulationMode;
-
-    _updateModeBadge(cfg.simulationMode);
+async function loadMasterConfig() {
+    try {
+        const res = await fetch('/api/v1/config');
+        const cfg = await res.json();
+        
+        if (cfg) {
+            _el('ck-auto').checked          = cfg.autoBuyEnabled;
+            _el('cfg-buy-amount').value     = cfg.buyAmountUsdt || 12;
+            _el('cfg-profit').value         = cfg.profitPct || 0;
+            _el('cfg-profit-amount').value  = cfg.profitAmountUsdt || 0.20;
+            _el('cfg-stop').value           = cfg.tslPct || 2.0;
+            
+            _updateModeBadge(!cfg.autoBuyEnabled);
+            console.log('[Config] Master configuration loaded from Redis');
+        }
+    } catch (err) {
+        console.error('[Config] Failed to load master config:', err);
+    }
 }
 
 /**
- * Read all form values and POST them to the server.
- * Called by onchange handlers in the HTML form fields.
+ * Read all form values and POST them to the Redis-backed API.
+ * This instantly updates the Java bot's behavior.
  */
 async function saveConfig() {
     const body = {
-        enabled:        _el('ck-auto').checked,
-        profitPct:      parseFloat(_el('cfg-profit').value),
-        stopLossPct:    parseFloat(_el('cfg-stop').value),
-        maxPositions:   parseInt(_el('cfg-maxpos').value, 10),
-        displayLimit:   parseInt(_el('cfg-limit').value, 10) || 10,
-        simulationMode: !_el('ck-live').checked,
+        autoBuyEnabled:    _el('ck-auto').checked,
+        buyAmountUsdt:     parseFloat(_el('cfg-buy-amount').value),
+        profitPct:         parseFloat(_el('cfg-profit').value),
+        profitAmountUsdt:  parseFloat(_el('cfg-profit-amount').value),
+        tslPct:            parseFloat(_el('cfg-stop').value),
+        limitBuyOffsetPct: 0.3
     };
 
     try {
-        const res = await fetch('/api/config', {
+        const res = await fetch('/api/v1/config', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify(body),
         });
         const data = await res.json();
-        if (data.ok) {
-            _updateModeBadge(body.simulationMode);
-            toast(body.enabled ? '⚡ Auto-trade ON' : 'Auto-trade paused', body.enabled ? 'g' : 'y');
+        
+        if (data.success) {
+            _updateModeBadge(!body.autoBuyEnabled);
+            
+            const targetStr = body.profitAmountUsdt > 0 
+                ? `$${body.profitAmountUsdt.toFixed(2)}` 
+                : `${body.profitPct}%`;
+                
+            const statusMsg = body.autoBuyEnabled ? '⚡ BOT LIVE' : '⏸ BOT PAUSED';
+            const color = body.autoBuyEnabled ? 'g' : 'y';
+            
+            if (window.toast) {
+                toast(`${statusMsg}: Spend $${body.buyAmountUsdt} | Target ${targetStr}`, color);
+            }
+            console.log('[Config] Master config saved to Redis:', body);
         }
     } catch (err) {
-        toast('Failed to save config', 'r');
+        if (window.toast) toast('Failed to sync with Bot', 'r');
         console.error('[Config] Save error:', err);
     }
 }
@@ -65,11 +77,15 @@ async function saveConfig() {
 function _el(id) { return document.getElementById(id); }
 
 /**
- * Update the SIM/LIVE badge text and colour class.
- * @param {boolean} isSimulation
+ * Update the SIM/LIVE badge based on Auto status.
+ * @param {boolean} isPaused
  */
-function _updateModeBadge(isSimulation) {
+function _updateModeBadge(isPaused) {
     const badge = _el('mode-badge');
-    badge.textContent = isSimulation ? 'SIM' : 'LIVE';
-    badge.className   = 'mode-badge ' + (isSimulation ? 'mode-sim' : 'mode-live');
+    if (!badge) return;
+    badge.textContent = isPaused ? 'PAUSED' : 'AUTO';
+    badge.className   = 'mode-badge ' + (isPaused ? 'mode-sim' : 'mode-live');
 }
+
+// Load config on startup
+window.addEventListener('load', loadMasterConfig);

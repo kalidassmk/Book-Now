@@ -2,6 +2,7 @@ package com.bogoai.booknow.agent;
 
 import com.bogoai.booknow.model.CurrentPrice;
 import com.bogoai.booknow.util.TradeExecutor;
+import com.bogoai.booknow.util.TradingConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,9 @@ public class ConsensusCoordinator {
 
     @Autowired
     private TradeExecutor tradeExecutor;
+
+    @Autowired
+    private TradingConfigService configService;
 
     private static final double CONSENSUS_THRESHOLD = 0.7;
 
@@ -50,7 +54,7 @@ public class ConsensusCoordinator {
         if (averageScore > CONSENSUS_THRESHOLD) {
             log.info("[Consensus] ✅ AGREE! Score {} > threshold {}. Triggering BUY for {}", 
                 String.format("%.2f", averageScore), CONSENSUS_THRESHOLD, symbol);
-            tradeExecutor.tryBuy(symbol, cp, 5.0, "CONSENSUS_AGENT");
+            tradeExecutor.tryBuy(symbol, cp, configService.getProfitPct(), "CONSENSUS_AGENT");
         } else {
             log.info("[Consensus] ⛔ DISAGREE. Score {} below threshold {}. Skipping {}.", 
                 String.format("%.2f", averageScore), CONSENSUS_THRESHOLD, symbol);

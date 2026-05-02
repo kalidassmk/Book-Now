@@ -66,6 +66,9 @@ public interface BookNowRepository {
     public void deleteFastMove(String key);
 
     public void saveBuy(String key, String symbol, Buy obj);
+    
+    /** Fetch a symbol from the BUY hash. */
+    public Buy getBuy(String key, String symbol);
 
     /** Persist a sell record to the SELL Redis hash (symbol → SellRecord JSON). */
     public void saveSell(String key, String symbol, Sell obj);

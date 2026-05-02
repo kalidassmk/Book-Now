@@ -233,6 +233,11 @@ public class BinanceApiRestClientImpl implements BinanceApiRestClient {
     return executeSync(binanceApiService.universalTransfer(asset, amount, type.toString(), BinanceApiConstants.DEFAULT_RECEIVING_WINDOW, System.currentTimeMillis()));
   }
 
+  @Override
+  public Object dustTransfer(List<String> asset) {
+    return executeSync(binanceApiService.dustTransfer(asset, BinanceApiConstants.DEFAULT_RECEIVING_WINDOW, System.currentTimeMillis()));
+  }
+
   // User stream endpoints
 
   @Override

@@ -23,6 +23,7 @@ import java.util.List;
 import static com.bogoai.api.client.domain.account.NewOrder.limitBuy;
 import static com.bogoai.api.client.domain.account.NewOrder.limitSell;
 import static com.bogoai.api.client.domain.account.NewOrder.marketBuy;
+import static com.bogoai.api.client.domain.account.NewOrder.marketSell;
 import static com.bogoai.api.client.domain.TimeInForce.GTC;
 import static com.bogoai.booknow.util.BookNowUtility.getHMS;
 import static com.bogoai.booknow.util.Constant.BUY_KEY;
@@ -67,25 +68,15 @@ public class TradeExecutor {
     @Autowired
     private TrailingStopLossService tslService;
 
+    @Autowired
+    private BinanceDustService binanceDustService;
+
+    @Autowired
+    private TradingConfigService configService;
+
     /** Toggle: false = Paper trade, true = Live orders */
     @Value("${trading.live-mode:false}")
     private boolean liveMode;
-
-    /** Toggle: false = Disable auto-buying, true = Enabled */
-    @Value("${trading.auto-buy-enabled:true}")
-    private boolean autoBuyEnabled;
-
-    /** Fixed USDT amount per trade (default $12) */
-    @Value("${trading.buy-amount-usdt:12}")
-    private double buyAmountUsdt;
-
-    /**
-     * How many percent BELOW the current price to place the limit-buy order.
-     * e.g. 0.3 means "buy at 0.3% below current price".
-     * Configurable via: trading.limit-buy-offset-pct=0.3
-     */
-    @Value("${trading.limit-buy-offset-pct:0.3}")
-    private double limitBuyOffsetPct;
 
     @Value("${prod.api.key}")
     private String prodApiKey;
@@ -122,7 +113,7 @@ public class TradeExecutor {
      * @param ruleLabel   which rule triggered (for logging/notification)
      */
     public void tryBuy(String symbol, CurrentPrice currentPrice, double sellPct, String ruleLabel) {
-        if (!autoBuyEnabled) {
+        if (!configService.isAutoBuyEnabled()) {
             log.info("[{}] Auto-buy is DISABLED via config. Skipping buy for {}.", ruleLabel, symbol);
             return;
         }
@@ -276,6 +267,10 @@ public class TradeExecutor {
             tradeState.markSold(symbol);
             tslService.reset(symbol);
 
+            // Immediate Dust Transfer to BNB after sale
+            String asset = symbol.replace("USDT", "");
+            binanceDustService.sweepToBnb(asset);
+
             String message = String.format("%s SELL %s @ %s", ruleLabel, symbol, sellPrice);
             log.info(message);
             BookNowUtility.runNotification(message);
@@ -297,8 +292,9 @@ public class TradeExecutor {
      * Paper mode : Simulate fill at the offset price (no real order placed).
      */
     private NewOrderResponse placeBuyOrder(String symbol, String qtyStr, BigDecimal currentPrice) {
+        double offsetPct = configService.getLimitBuyOffsetPct();
         // Limit buy price = currentPrice × (1 - offset%)
-        BigDecimal offset      = BigDecimal.valueOf(1.0 - limitBuyOffsetPct / 100.0);
+        BigDecimal offset      = BigDecimal.valueOf(1.0 - offsetPct / 100.0);
         BigDecimal limitPrice  = currentPrice.multiply(offset);
         
         // DYNAMIC SCALING: Use tickSize from Binance
@@ -312,7 +308,7 @@ public class TradeExecutor {
         NewOrderResponse response = new NewOrderResponse();
         if (liveMode) {
             log.info("LIVE limitBuy {} qty={} price={} ({}% below {})",
-                symbol, qty, limitPriceStr, limitBuyOffsetPct, currentPrice);
+                symbol, qty, limitPriceStr, offsetPct, currentPrice);
             try {
                 log.info("[Binance API REQUEST] newOrder (LIMIT BUY) | symbol={} quantity={} price={} timeInForce=GTC", symbol, qty, limitPriceStr);
                 response = prodBinanceApiARestClient.newOrder(
@@ -339,7 +335,7 @@ public class TradeExecutor {
             response.setExecutedQty(qty.toPlainString());
             response.setSymbol(symbol);
             log.info("PAPER LIMIT-BUY {} qty={} price={} ({}% below market)",
-                symbol, qty, limitPriceStr, limitBuyOffsetPct);
+                symbol, qty, limitPriceStr, configService.getLimitBuyOffsetPct());
         }
         return response;
     }
@@ -350,7 +346,7 @@ public class TradeExecutor {
      * Uses the coin's price and respects the price's own scale for precision.
      */
     private String calculateQty(String symbol, BigDecimal price) {
-        BigDecimal amount = BigDecimal.valueOf(buyAmountUsdt);
+        BigDecimal amount = BigDecimal.valueOf(configService.getBuyAmountUsdt());
         BigDecimal qty = amount.divide(price, new MathContext(price.scale() + 4, RoundingMode.CEILING));
         
         // DYNAMIC SCALING: Use stepSize from Binance
@@ -370,19 +366,33 @@ public class TradeExecutor {
     private void placeLimitSell(NewOrderResponse buyResponse, BigDecimal buyPrice, double sellPct) {
         try {
             String symbol = buyResponse.getSymbol();
-            BigDecimal sellMult  = BigDecimal.valueOf(1.0 + sellPct / 100.0);
-            BigDecimal sellPriceBD = buyPrice.multiply(sellMult);
+            BigDecimal qtyBD = new BigDecimal(buyResponse.getExecutedQty());
+            qtyBD = filterService.roundQuantity(symbol, qtyBD);
+            String qty = qtyBD.toPlainString();
+
+            BigDecimal sellPriceBD;
+            double profitAmount = configService.getProfitAmountUsdt();
+
+            if (profitAmount > 0) {
+                // Calculate sell price based on fixed USDT profit amount
+                // Formula: sellPrice = (cost + profit) / quantity
+                BigDecimal totalCost = buyPrice.multiply(qtyBD);
+                BigDecimal targetTotal = totalCost.add(BigDecimal.valueOf(profitAmount));
+                sellPriceBD = targetTotal.divide(qtyBD, MathContext.DECIMAL128);
+                log.info("[AmountMode] Target profit: ${}. Calculated sellPrice: {}", profitAmount, sellPriceBD);
+            } else {
+                // Fallback to percentage-based profit
+                BigDecimal sellMult  = BigDecimal.valueOf(1.0 + sellPct / 100.0);
+                sellPriceBD = buyPrice.multiply(sellMult);
+                log.info("[PctMode] Target profit: {}%. Calculated sellPrice: {}", sellPct, sellPriceBD);
+            }
             
             // DYNAMIC SCALING
             sellPriceBD = filterService.roundPrice(symbol, sellPriceBD);
             String sellPriceStr = sellPriceBD.toPlainString();
 
-            BigDecimal qtyBD = new BigDecimal(buyResponse.getExecutedQty());
-            qtyBD = filterService.roundQuantity(symbol, qtyBD);
-            String qty = qtyBD.toPlainString();
-
-            log.info("LIVE limitSell {} qty={} sellPrice={} (+{}%)",
-                buyResponse.getSymbol(), qty, sellPriceStr, sellPct);
+            log.info("LIVE limitSell {} qty={} sellPrice={} (Target: {})",
+                buyResponse.getSymbol(), qty, sellPriceStr, profitAmount > 0 ? "$" + profitAmount : sellPct + "%");
 
             log.info("[Binance API REQUEST] newOrder (LIMIT SELL) | symbol={} quantity={} price={} timeInForce=GTC", buyResponse.getSymbol(), qty, sellPriceStr);
             NewOrderResponse sellResponse = prodBinanceApiARestClient.newOrder(
@@ -411,14 +421,14 @@ public class TradeExecutor {
      * @param profitPct  desired profit % for the sell order
      */
     public NewOrderResponse tryManualLimitBuy(String symbol, CurrentPrice currentPrice,
-                                   double offsetPct, double profitPct) {
+                                   double manualQty, double offsetPct, double profitPct) {
         if (tradeState.isAlreadyBought(symbol)) {
-            log.warn("[MANUAL] Skip limit-buy {} — already in position", symbol);
+            log.warn("[MANUAL] Skip limit-buy {} - already in position", symbol);
             return null;
         }
 
         if (delistService.isDelisted(symbol)) {
-            log.warn("[MANUAL] CRITICAL: Skip limit-buy {} — Symbol is marked as DELISTED!", symbol);
+            log.warn("[MANUAL] CRITICAL: Skip limit-buy {} - Symbol is marked as DELISTED!", symbol);
             return null;
         }
         try {
@@ -428,7 +438,10 @@ public class TradeExecutor {
             
             // DYNAMIC SCALING: Round price and quantity based on filters
             limitBuyPrice = filterService.roundPrice(symbol, limitBuyPrice);
-            String qty = calculateQty(symbol, limitBuyPrice);
+            
+            String qty = (manualQty > 0) 
+                ? filterService.roundQuantity(symbol, new BigDecimal(manualQty)).toPlainString()
+                : calculateQty(symbol, limitBuyPrice);
             
             // VALIDATION: Check min notional and filters (Throws exception if invalid)
             filterService.validateNotional(symbol, new BigDecimal(qty), limitBuyPrice);
@@ -437,69 +450,140 @@ public class TradeExecutor {
 
             NewOrderResponse buyResponse = new NewOrderResponse();
 
-            // ── Step 1: Place limit-BUY ────────────────────────────────────────────
+            // --- Step 1: Place limit-BUY -------------------------------------------
             if (liveMode) {
                 log.info("[MANUAL] LIVE limitBuy {} qty={} @ {} ({}% below {})",
                     symbol, qty, limitBuyStr, offsetPct, price);
-                log.info("[Binance API REQUEST] newOrder (MANUAL LIMIT BUY) | symbol={} quantity={} price={} timeInForce=GTC", symbol, qty, limitBuyStr);
                 buyResponse = prodBinanceApiARestClient.newOrder(limitBuy(symbol, GTC, qty, limitBuyStr));
                 log.info("[Binance API RESPONSE] newOrder | symbol={} orderId={} status={} price={} origQty={} executedQty={}", 
-                    symbol, buyResponse.getOrderId(), buyResponse.getStatus(), buyResponse.getPrice(), buyResponse.getOrigQty(), buyResponse.getExecutedQty());
+                    buyResponse.getOrderId(), buyResponse.getStatus(), buyResponse.getPrice(), buyResponse.getOrigQty(), buyResponse.getExecutedQty());
             } else {
                 log.info("[MANUAL] PAPER limitBuy {} qty={} @ {} ({}% below {})",
                     symbol, qty, limitBuyStr, offsetPct, price);
+                buyResponse.setSymbol(symbol);
                 buyResponse.setOrderId(System.currentTimeMillis()); // Fake ID for paper
                 buyResponse.setPrice(limitBuyStr);
                 buyResponse.setExecutedQty(qty);
+                buyResponse.setStatus(com.bogoai.api.client.domain.OrderStatus.FILLED);
             }
 
-            // ── Step 2: Immediately place limit-SELL at profit target ────────────────
-            BigDecimal limitSellPrice = limitBuyPrice
-                    .multiply(BigDecimal.valueOf(1.0 + profitPct / 100.0));
-            
-            // DYNAMIC SCALING
-            limitSellPrice = filterService.roundPrice(symbol, limitSellPrice);
-            String limitSellStr = limitSellPrice.toPlainString();
+            // --- Step 2: Record in Redis -------------------------------------------
+            recordManualBuy(buyResponse, currentPrice, profitPct);
 
-            if (liveMode) {
-                log.info("[MANUAL] LIVE limitSell {} qty={} @ {} (+{}%)",
-                    symbol, qty, limitSellStr, profitPct);
-                log.info("[Binance API REQUEST] newOrder (MANUAL LIMIT SELL) | symbol={} quantity={} price={} timeInForce=GTC", symbol, qty, limitSellStr);
-                NewOrderResponse sellResponse = prodBinanceApiARestClient.newOrder(limitSell(symbol, GTC, qty, limitSellStr));
-                log.info("[Binance API RESPONSE] newOrder | symbol={} orderId={} status={} price={} origQty={} executedQty={}", 
-                    symbol, sellResponse.getOrderId(), sellResponse.getStatus(), sellResponse.getPrice(), sellResponse.getOrigQty(), sellResponse.getExecutedQty());
-            } else {
-                log.info("[MANUAL] PAPER limitSell {} qty={} @ {} (+{}%)",
-                    symbol, qty, limitSellStr, profitPct);
-            }
-
-            // ── Step 3: Record in Redis BUY hash so dashboard shows the card ────────
-            Buy buy = new Buy();
-            buy.setStatus(buyResponse.getStatus() != null ? buyResponse.getStatus().name() : "NEW");
-            buy.setBuyPercentage(currentPrice.getPercentage());
-            buy.setBuyPrice(limitBuyPrice);
-            buy.setSelP(profitPct);
-            buy.setHms(getHMS());
-            buy.setOrderId(buyResponse.getOrderId());
-            buy.setExecutedQty(buyResponse.getExecutedQty());
-            buy.setOrigQty(buyResponse.getOrigQty());
-
-            repository.saveBuy(BUY_KEY, symbol, buy);
-            tradeState.markBought(symbol, "MANUAL_LIMIT");
-            tslService.startTracking(symbol, limitBuyPrice);
-
-            String message = String.format(
-                "[MANUAL] Limit-BUY %s @ %s | Limit-SELL @ %s (+%.1f%%)",
-                symbol, limitBuyStr, limitSellStr, profitPct);
-            log.info(message);
-            BookNowUtility.runNotification(message);
-            
             return buyResponse;
-
         } catch (Exception e) {
-            log.error("[MANUAL] Error placing limit orders for {}: {}", symbol, e.getMessage(), e);
+            log.error("[MANUAL] Limit buy failed for {}: {}", symbol, e.getMessage());
             return null;
         }
     }
-}
 
+    /**
+     * Manual market-buy from the dashboard.
+     */
+    public NewOrderResponse tryManualMarketBuy(String symbol, CurrentPrice currentPrice, double manualQty) {
+        if (tradeState.isAlreadyBought(symbol)) {
+            log.warn("[MANUAL] Skip market-buy {} - already in position", symbol);
+            return null;
+        }
+        try {
+            BigDecimal price = currentPrice.getPrice();
+            String qty = filterService.roundQuantity(symbol, new BigDecimal(manualQty)).toPlainString();
+            
+            // Min notional check
+            filterService.validateNotional(symbol, new BigDecimal(qty), price);
+
+            NewOrderResponse buyResponse = new NewOrderResponse();
+            if (liveMode) {
+                log.info("[MANUAL] LIVE marketBuy {} qty={} @ ~{}", symbol, qty, price);
+                buyResponse = prodBinanceApiARestClient.newOrder(marketBuy(symbol, qty));
+                log.info("[Binance API RESPONSE] marketBuy | symbol={} orderId={} status={} price={} executedQty={}", 
+                    buyResponse.getSymbol(), buyResponse.getOrderId(), buyResponse.getStatus(), buyResponse.getPrice(), buyResponse.getExecutedQty());
+            } else {
+                log.info("[MANUAL] PAPER marketBuy {} qty={} @ ~{}", symbol, qty, price);
+                buyResponse.setSymbol(symbol);
+                buyResponse.setOrderId(System.currentTimeMillis());
+                buyResponse.setPrice(price.toPlainString());
+                buyResponse.setExecutedQty(qty);
+                buyResponse.setStatus(com.bogoai.api.client.domain.OrderStatus.FILLED);
+            }
+            
+            // Record in Redis so it shows on Dashboard
+            recordManualBuy(buyResponse, currentPrice, configService.getProfitPct());
+            
+            return buyResponse;
+        } catch (Exception e) {
+            log.error("[MANUAL] Market buy failed for {}: {}", symbol, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Manual sell (Market) from the dashboard.
+     */
+    public void tryManualSell(String symbol, CurrentPrice cp, Double qty, String ruleLabel) {
+        try {
+            BigDecimal sellPrice = cp.getPrice();
+            String qtyStr;
+
+            if (qty != null && qty > 0) {
+                qtyStr = filterService.roundQuantity(symbol, new BigDecimal(qty)).toPlainString();
+            } else {
+                // Fallback to what we have in Redis
+                Buy buy = repository.getBuy(BUY_KEY, symbol);
+                if (buy == null || buy.getExecutedQty() == null) {
+                    log.error("[MANUAL SELL] No position found in Redis for {}", symbol);
+                    return;
+                }
+                qtyStr = buy.getExecutedQty();
+            }
+
+            if (liveMode) {
+                log.info("[MANUAL] LIVE marketSell {} qty={} @ ~{}", symbol, qtyStr, sellPrice);
+                prodBinanceApiARestClient.newOrder(com.bogoai.api.client.domain.account.NewOrder.marketSell(symbol, qtyStr));
+                
+                // Sweep to BNB immediately
+                binanceDustService.sweepToBnb(symbol.replace("USDT", ""));
+            } else {
+                log.info("[MANUAL] PAPER marketSell {} qty={} @ ~{}", symbol, qtyStr, sellPrice);
+            }
+
+            // Cleanup
+            repository.deleteBuy(BUY_KEY, symbol);
+            tradeState.markSold(symbol);
+
+            // Log trade
+            Sell sell = new Sell();
+            sell.setSellingPoint(sellPrice.toPlainString());
+            sell.setStatus("Y");
+            sell.setTimestamp(Timestamp.from(Instant.now()));
+            repository.saveSell(SELL_KEY, symbol, sell);
+
+            log.info("[MANUAL SELL] Completed for {}", symbol);
+
+        } catch (Exception e) {
+            log.error("[MANUAL SELL] Failed for {}: {}", symbol, e.getMessage());
+        }
+    }
+
+    private void recordManualBuy(NewOrderResponse buyResponse, CurrentPrice currentPrice, double profitPct) {
+        String symbol = buyResponse.getSymbol();
+        BigDecimal price = new BigDecimal(buyResponse.getPrice());
+        
+        Buy buy = new Buy();
+        buy.setStatus(buyResponse.getStatus() != null ? buyResponse.getStatus().name() : "FILLED");
+        buy.setBuyPercentage(currentPrice.getPercentage());
+        buy.setBuyPrice(price);
+        buy.setSelP(profitPct);
+        buy.setHms(getHMS());
+        buy.setOrderId(buyResponse.getOrderId());
+        buy.setExecutedQty(buyResponse.getExecutedQty());
+        buy.setOrigQty(buyResponse.getOrigQty());
+        buy.setBuyTimeStamp(Timestamp.from(Instant.now()));
+        
+        repository.saveBuy(BUY_KEY, symbol, buy);
+        tradeState.markBought(symbol, "MANUAL");
+        tslService.startTracking(symbol, price);
+    }
+
+
+}

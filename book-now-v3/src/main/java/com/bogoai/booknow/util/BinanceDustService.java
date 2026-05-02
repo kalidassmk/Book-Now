@@ -137,4 +137,20 @@ public class BinanceDustService {
             log.error("[DustService] Auto-transfer job encountered an error: {}", e.getMessage());
         }
     }
+
+    /**
+     * Convert a specific asset's dust balance to BNB.
+     * @param asset e.g. "SOL"
+     */
+    public void sweepToBnb(String asset) {
+        if ("BNB".equalsIgnoreCase(asset) || "USDT".equalsIgnoreCase(asset)) return;
+        
+        try {
+            log.info("[DustService] Requesting BNB conversion for {}...", asset);
+            Object result = prodBinanceApiARestClient.dustTransfer(java.util.Collections.singletonList(asset));
+            log.info("[DustService] SUCCESS: Converted {} dust to BNB. Result: {}", asset, result);
+        } catch (Exception e) {
+            log.error("[DustService] BNB conversion failed for {}: {}", asset, e.getMessage());
+        }
+    }
 }

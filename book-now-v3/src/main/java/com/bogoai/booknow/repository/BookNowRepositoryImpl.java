@@ -270,6 +270,10 @@ public class BookNowRepositoryImpl implements BookNowRepository {
     public void saveBuy(String key, String symbol, Buy obj) {
         redisTemplateBuy.opsForHash().put(key, symbol, obj);
     }
+    @Override
+    public Buy getBuy(String key, String symbol) {
+        return (Buy) redisTemplateBuy.opsForHash().get(key, symbol);
+    }
 
     @Override
     public void saveSell(String key, String symbol, Sell obj) {

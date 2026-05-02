@@ -11,7 +11,7 @@ const { spawn } = require('child_process');
 const PORT = 3000;
 const REDIS_HOST = '127.0.0.1';
 const REDIS_PORT = 6379;
-const POLL_MS = 400;   // 1 second polling
+const POLL_MS = 1500;   // Reduced from 400ms to 1500ms to lower Redis load
 const SPRING_PORT = 8083;
 const SPRING_BASE = `http://localhost:${SPRING_PORT}/api/v1`;
 const SPRING_DIR = path.resolve(__dirname, '../book-now-v3');
@@ -62,11 +62,60 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Binance Worker ───────────────────────────────────────────────────────────
 const binanceWorker = require('./binance-worker');
-binanceWorker.start(io);
+binanceWorker.start(io, handleExecution);
+
+// If the worker is in the same process, it calls handleExecution directly.
+function handleExecution(event) {
+    const { symbol, orderId, status, executedQty, price } = event;
+    console.log(`[Event-Driven] Processing ${symbol} execution: ${status}`);
+
+    const order = activeLimitOrders.get(orderId);
+    if (!order) return;
+
+    order.status = status;
+    order.executedQty = executedQty;
+
+    if (status === 'FILLED') {
+        activeLimitOrders.delete(orderId);
+
+        positions.set(symbol, {
+            symbol,
+            buyPrice: parseFloat(price),
+            qty: parseFloat(executedQty),
+            buyTime: Date.now(),
+            status: 'FILLED'
+        });
+        console.log(`[Event-Driven] Position created for ${symbol} @ ${price}`);
+    }
+
+    io.emit('order-update', order);
+}
 
 const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT, lazyConnect: true });
 redis.on('error', e => console.error('[Server] Redis Error:', e.message));
-redis.on('connect', () => console.log('[Server] Redis Connected ✅'));
+redis.on('connect', async () => {
+    console.log('[Server] Redis Connected ✅');
+    
+    // Sync API Keys to Redis for Workers and Python Scripts
+    const apiKey = process.env.BINANCE_API_KEY;
+    const secretKey = process.env.BINANCE_SECRET_KEY;
+    
+    if (apiKey && secretKey) {
+        await redis.set('BINANCE_API_KEY', apiKey);
+        await redis.set('BINANCE_SECRET_KEY', secretKey);
+        console.log('[Config] 🛡️ API Credentials synchronized to Redis.');
+    } else {
+        console.warn('[Config] ⚠️ API Keys missing in .env! Redis sync skipped.');
+    }
+
+    // Bulletproof Sync: Re-prime keys every 60 seconds in case of Redis FLUSHALL
+    setInterval(async () => {
+        if (apiKey && secretKey) {
+            await redis.set('BINANCE_API_KEY', apiKey);
+            await redis.set('BINANCE_SECRET_KEY', secretKey);
+        }
+    }, 60 * 1000);
+});
 
 io.on('connection', (socket) => {
     console.log(`[Socket] Client connected: ${socket.id}`);
@@ -518,7 +567,7 @@ async function tick() {
 
         // ── 3. Monitor Active Limit Orders ──────────────────────────────────
         for (const order of activeLimitOrders.values()) {
-            const cp = prices[order.symbol];
+            const cp = priceHash[order.symbol];
             if (!cp) continue;
 
             const current = parseFloat(cp.price);
@@ -568,7 +617,6 @@ async function tick() {
 
 
         // 5. Account Data (from Binance Worker)
-        console.log("[Data Flow] Step 4: Reading Binance Account Data from Redis...");
         const [binanceOrdersRaw, binanceTradesRaw, binanceOrderListsRaw, binanceBalancesRaw, usdtFree] = await Promise.all([
             redis.get('BINANCE:OPEN_ORDERS:ALL'),
             redis.get('BINANCE:TRADE_HISTORY:ALL'),
@@ -596,7 +644,7 @@ async function tick() {
             }
         });
         
-        console.log(`[Data Flow] Step 4 Info: Fetched ${balances.length} assets, ${openOrders.length} orders, ${tradeHistory.length} trades.`);
+
 
         let usdtAmount = 0;
         if (usdtFree) {
@@ -608,6 +656,9 @@ async function tick() {
             }
         }
 
+        const configRaw = await redis.get(CONFIG_KEY);
+        const config = configRaw ? JSON.parse(configRaw) : { autoBuyEnabled: false };
+
         const stats = {
             fastCount: allCoins.length,
             positions: positions.size,
@@ -615,7 +666,10 @@ async function tick() {
             botSells: botSells.length,
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
-            autoEnabled: autoConfig.enabled,
+            autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
+            buyAmount: config.buyAmountUsdt || 12,
+            profitPct: config.profitPct || 0,
+            profitAmount: config.profitAmountUsdt || 0.20,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -629,7 +683,7 @@ async function tick() {
         stats.fastCount = Object.keys(fastCoins).length;
         stats.fastDisplayed = displayed.length;
 
-        console.log(`[Data Flow] Step 5: Broadcasting update...`);
+
         const behavioralSentiment = await getAdaptiveSentiment();
         const volumeScores = await getVolumeScores();
         
@@ -725,22 +779,55 @@ app.get('/api/trade/order-history', async (req, res) => {
 
 // Order List Proxy (OCO)
 app.get('/api/trade/order-list', async (req, res) => {
+    const limit = req.query.limit;
+    console.log(`[Proxy] GET Order List: ${SPRING_BASE}/binance/trade/order-list?limit=${limit || 100}`);
     try {
-        const { startTime, endTime, limit } = req.query;
         let url = `${SPRING_BASE}/binance/trade/order-list?limit=${limit || 500}`;
-        if (startTime) url += `&startTime=${startTime}`;
-        if (endTime) url += `&endTime=${endTime}`;
-
-        console.log(`[Proxy] GET Order List: ${url}`);
         const response = await fetch(url);
         const data = await response.json();
         res.json(data);
-    } catch (e) {
-        console.error(`[Proxy] Order List Error: ${e.message}`);
-        res.status(500).json({ error: e.message });
+    } catch (error) {
+        console.error('[Proxy] Order List Error:', error.message);
+        res.status(500).json({ error: 'Backend order list service unavailable' });
     }
 });
 
+
+// ─── Configuration API ────────────────────────────────────────────────────────
+const CONFIG_KEY = 'TRADING_CONFIG';
+
+app.get('/api/v1/config', async (req, res) => {
+    try {
+        const raw = await redis.get(CONFIG_KEY);
+        const config = raw ? JSON.parse(raw) : {
+            autoBuyEnabled: false,
+            buyAmountUsdt: 12.0,
+            profitPct: 0,
+            profitAmountUsdt: 0.20,
+            limitBuyOffsetPct: 0.3,
+            tslPct: 2.0
+        };
+        res.json(config);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch config' });
+    }
+});
+
+app.post('/api/v1/config', async (req, res) => {
+    try {
+        const newConfig = req.body;
+        // Basic validation
+        if (typeof newConfig.autoBuyEnabled !== 'boolean') return res.status(400).json({ error: 'Invalid autoBuyEnabled' });
+        if (isNaN(newConfig.buyAmountUsdt)) return res.status(400).json({ error: 'Invalid buyAmountUsdt' });
+        if (isNaN(newConfig.profitAmountUsdt)) return res.status(400).json({ error: 'Invalid profitAmountUsdt' });
+        
+        await redis.set(CONFIG_KEY, JSON.stringify(newConfig));
+        console.log('[Config] Configuration updated via dashboard:', newConfig);
+        res.json({ success: true, config: newConfig });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to save config' });
+    }
+});
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
 // ─── Binance Account APIs (Node-native) ───────────────────────────────────────
@@ -855,18 +942,28 @@ app.post('/api/buy', async (req, res) => {
     console.log(`[API] POST /api/buy | symbol=${symbol} limitPrice=${limitPrice} targetPrice=${targetPrice}`);
     
     const p = parseFloat(limitPrice);
-    const q = req.body.qty || (12 / p); // Use provided qty or $12 default
+    const isMarket = (!p || p <= 0);
+    const q = req.body.qty || (12 / (p || 1)); // Use provided qty or $12 default
     const selPct = customSelPct || 2.0;
 
-    if (!symbol || !p) return res.status(400).json({ error: 'symbol + price required' });
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    if (!isMarket && !p) return res.status(400).json({ error: 'price required for LIMIT order' });
+    
     if (positions.has(symbol)) return res.status(409).json({ error: 'Position already open' });
 
     // ── 1. Cascade to Spring Boot (handles real Binance orders) ──────────────
     try {
-        const url = `${SPRING_BASE}/order/limit-buy/${encodeURIComponent(symbol)}` +
-                    `?limitPrice=${p}&targetPrice=${targetPrice || 0}&profitPct=${selPct}`;
-        
-        console.log(`[Spring Boot] POST /order/limit-buy | symbol=${symbol} price=${p}`);
+        let url;
+        if (isMarket) {
+            // Market Buy endpoint
+            url = `${SPRING_BASE}/order/buy/${encodeURIComponent(symbol)}?qty=${q}`;
+            console.log(`[Spring Boot] POST /order/buy (MARKET) | symbol=${symbol} qty=${q}`);
+        } else {
+            // Limit Buy endpoint
+            url = `${SPRING_BASE}/order/limit-buy/${encodeURIComponent(symbol)}` +
+                  `?limitPrice=${p}&targetPrice=${targetPrice || 0}&profitPct=${selPct}&qty=${q}`;
+            console.log(`[Spring Boot] POST /order/limit-buy | symbol=${symbol} price=${p} qty=${q}`);
+        }
         const sbRes = await Promise.race([
             fetch(url),
             new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
@@ -953,13 +1050,13 @@ app.post('/api/buy', async (req, res) => {
 
 // Manual sell
 app.post('/api/sell', async (req, res) => {
-    const { symbol, price } = req.body;
-    console.log(`[API] POST /api/sell | symbol=${symbol} price=${price}`);
-    if (!symbol || !price) return res.status(400).json({ error: 'symbol + price required' });
+    const { symbol, price, qty } = req.body;
+    console.log(`[API] POST /api/sell | symbol=${symbol} price=${price} qty=${qty}`);
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
     
     try {
-        const url = `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}`;
-        console.log(`[Spring Boot] GET /sell/${symbol}`);
+        const url = `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}?qty=${qty || 0}`;
+        console.log(`[Spring Boot] GET /sell/${symbol}?qty=${qty}`);
         const sbRes = await fetch(url);
         if (sbRes.ok) {
             positions.delete(symbol);

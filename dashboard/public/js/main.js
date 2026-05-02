@@ -27,7 +27,7 @@
 const socket = io();   // Connects to the server that served this page
 window.socket = socket; // Expose globally for other modules (wallet.js, etc.)
 let currentCurrency = 'USDT'; // 'USDT' or 'INR'
-let lastUpdateData = null;
+window.lastUpdateData = null;
 
 // ── Connection lifecycle ──────────────────────────────────────────────────────
 
@@ -37,13 +37,13 @@ socket.on('disconnect', () => { console.warn('[Socket] Disconnected ❌'); windo
 function toggleCurrency() {
     currentCurrency = currentCurrency === 'USDT' ? 'INR' : 'USDT';
     document.getElementById('currency-label').textContent = currentCurrency + ' Mode';
-    if (lastUpdateData) {
-        renderScanner(lastUpdateData.coins || []);
-        renderPositions(lastUpdateData.activePositions || []);
-        const allActive = [...(lastUpdateData.activePositions || []), ...(lastUpdateData.botPositions || [])];
+    if (window.lastUpdateData) {
+        renderScanner(window.lastUpdateData.coins || []);
+        renderPositions(window.lastUpdateData.activePositions || []);
+        const allActive = [...(window.lastUpdateData.activePositions || []), ...(window.lastUpdateData.botPositions || [])];
         renderBotPositions(allActive);
-        renderBotSells(lastUpdateData.botSells || []);
-        _updateStats(lastUpdateData.stats || {});
+        renderBotSells(window.lastUpdateData.botSells || []);
+        _updateStats(window.lastUpdateData.stats || {});
     }
 }
 
@@ -51,10 +51,23 @@ function toggleCurrency() {
 
 socket.on('update', (data) => {
     // Log updates every 10 ticks to avoid flooding
-    if (!window._tick) window._tick = 0;
-    if (++window._tick % 10 === 0) console.log('[Socket] Update received', { fastCoins: data.coins?.length, positions: data.activePositions?.length });
+    // window.lastUpdateData = data;
 
-    lastUpdateData = data;
+    window.lastUpdateData = data;
+    
+    // Check for Scalper Signals
+    if (data.scalperSignals) {
+        Object.values(data.scalperSignals).forEach(sig => {
+            if (sig && sig.signal === 'BUY') {
+                const now = Date.now();
+                if (!window._lastScalperToast || now - window._lastScalperToast > 30000) {
+                    toast(`🚀 SCALPER BUY SIGNAL: ${sig.symbol} @ ${sig.price}`, 'g');
+                    window._lastScalperToast = now;
+                }
+            }
+        });
+    }
+
     // Update the timestamp in the topbar
     const tsEl = document.getElementById('live-ts-header') || document.getElementById('live-ts');
     if (tsEl) tsEl.textContent = new Date(data.ts).toLocaleTimeString();

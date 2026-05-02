@@ -82,14 +82,25 @@ If you need to debug a specific algorithm, you can run it separately. You must `
 *Note: Use your specific python path if necessary (e.g., `/Users/bogoai/Book-Now/venv313/bin/python3`).*
 
 ### 7. Running Utility & Scanning Scripts
-These scripts are used for broad market discovery and deep analysis:
+These scripts are used for broad market discovery and deep analysis. You can run them all at once using the Utility Master:
 
 | Script | Command | Purpose |
 | :--- | :--- | :--- |
-| **Market Scanner** | `cd /Users/bogoai/Book-Now/binance-sentiment-engine && /Users/bogoai/Book-Now/venv313/bin/python3 market_sentiment_engine.py` | Scans **ALL USDT pairs** to find best setups. |
-| **Deep Analyzer** | `cd /Users/bogoai/Book-Now/binance-sentiment-engine && /Users/bogoai/Book-Now/venv313/bin/python3 volume_price_analyzer.py --symbol BTC/USDT` | Deep-dive 12-timeframe analysis for one coin. |
-| **Fast Move Scan** | `cd /Users/bogoai/Book-Now/binance-sentiment-engine && /Users/bogoai/Book-Now/venv313/bin/python3 volume_price_analyzer.py --scan` | Scans current trending coins in Redis. |
-| **Symbol Sync** | `cd /Users/bogoai/Book-Now/binance-sentiment-engine && /Users/bogoai/Book-Now/venv313/bin/python3 sync_symbols.py` | **Live Binance API Sync**: Fetches Top 200 coins by volume and updates Redis globally. |
+| **Utility Master** | `cd binance-sentiment-engine && ../venv313/bin/python3 start_utilities.py` | **One-Stop Hub**: Runs Sync, Scanner, and Fast-Move Scan in a smart loop. |
+| **Market Scanner** | `cd binance-sentiment-engine && ../venv313/bin/python3 market_sentiment_engine.py` | Scans **ALL USDT pairs** to find best setups. |
+| **Deep Analyzer** | `cd binance-sentiment-engine && ../venv313/bin/python3 volume_price_analyzer.py --symbol BTC/USDT` | Deep-dive 12-timeframe analysis for one coin. |
+| **Fast Move Scan** | `cd binance-sentiment-engine && ../venv313/bin/python3 volume_price_analyzer.py --scan` | Scans current trending coins in Redis. |
+| **Symbol Sync** | `cd binance-sentiment-engine && ../venv313/bin/python3 sync_symbols.py` | **Live Binance API Sync**: Fetches Top 200 coins and updates Redis. |
+
+### 🛠️ Utility Master (`start_utilities.py`)
+One script to rule them all. Manages:
+- `sync_symbols.py`: Keeps your Top USDT list fresh.
+- `market_sentiment_engine.py`: Continuous behavioral analysis.
+- `volume_price_analyzer.py --scan`: Periodically finds momentum breakouts.
+
+```bash
+python3 start_utilities.py
+```
 
 ---
 

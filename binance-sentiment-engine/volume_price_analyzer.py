@@ -211,15 +211,13 @@ class VolumePriceAnalyzer:
                 self.use_redis = False
 
     def analyze(self, symbol: str) -> Optional[Dict]:
-        logger.info(f"{'═' * 60}")
-        logger.info(f"  Analyzing: {symbol}")
-        logger.info(f"{'═' * 60}")
+        # logger.info(f"  Analyzing: {symbol}")
 
         tf_results = []
         tf_breakdown = {}
 
         for tf_name, interval, limit, weight, category in TIMEFRAME_CONFIG:
-            logger.info(f"  ⏱  Fetching {tf_name:>4s} ({limit} candles) …")
+            # logger.info(f"  ⏱  Fetching {tf_name:>4s} ({limit} candles) …")
             df = fetch_klines(symbol, interval, limit)
             indicators = compute_indicators(df)
 
@@ -260,7 +258,10 @@ class VolumePriceAnalyzer:
             "timestamp": datetime.now().isoformat(),
         }
 
-        self._print_breakdown(result)
+        # Only print full breakdown for BUY decisions
+        if "BUY" in decision:
+            self._print_breakdown(result)
+            logger.info(f"🎯 BUY SIGNAL FOUND: {symbol} (Score: {final_score})")
 
         if self.use_redis:
             self._store_redis(symbol, result)

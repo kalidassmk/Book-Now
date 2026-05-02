@@ -12,6 +12,7 @@ import com.bogoai.booknow.model.Sell;
 import com.bogoai.booknow.model.ShortestTime;
 import com.bogoai.booknow.model.SymbolRule;
 import com.bogoai.booknow.model.TimeAnalyse;
+import com.bogoai.booknow.model.TradingConfig;
 import com.bogoai.booknow.model.WatchList;
 import com.bogoai.booknow.response.RollingWindowTicker1HResponse;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
@@ -253,6 +254,23 @@ public class RedisConfig {
         RedisTemplate<String, DustAsset> template = new RedisTemplate<>();
         template.setConnectionFactory(jedisConnectionFactory());
         Jackson2JsonRedisSerializer<DustAsset> jacksonSeial = new Jackson2JsonRedisSerializer<>(DustAsset.class);
+        ObjectMapper om = new ObjectMapper();
+        om.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        jacksonSeial.setObjectMapper(om);
+        StringRedisSerializer stringSerial = new StringRedisSerializer();
+        template.setKeySerializer(stringSerial);
+        template.setValueSerializer(jacksonSeial);
+        template.setHashKeySerializer(stringSerial);
+        template.setHashValueSerializer(jacksonSeial);
+        template.afterPropertiesSet();
+        return template;
+    }
+
+    @Bean(name = "redisTemplateTradingConfig")
+    public RedisTemplate<String, TradingConfig> redisTemplateTradingConfig() {
+        RedisTemplate<String, TradingConfig> template = new RedisTemplate<>();
+        template.setConnectionFactory(jedisConnectionFactory());
+        Jackson2JsonRedisSerializer<TradingConfig> jacksonSeial = new Jackson2JsonRedisSerializer<>(TradingConfig.class);
         ObjectMapper om = new ObjectMapper();
         om.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
         jacksonSeial.setObjectMapper(om);
