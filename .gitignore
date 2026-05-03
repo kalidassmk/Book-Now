@@ -20,3 +20,10 @@ dashboard.log
 # Java
 target/
 book-now-v3/target/
+
+# python-engine build artifacts
+python-engine/booknow.egg-info/
+python-engine/build/
+python-engine/dist/
+python-engine/*.egg-info/
+python-engine/.venv/
