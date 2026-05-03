@@ -2,6 +2,10 @@
 
 # ──────────────────────────────────────────────────────────────────────────────
 # restart_all.sh - Auto-restart for BookNow Trading Suite
+#
+# Spring Boot backend has been removed (project is migrating to Python).
+# This script now only manages the Node dashboard. The Python trading
+# engine that replaces book-now-v3/ will be added here once it's built.
 # ──────────────────────────────────────────────────────────────────────────────
 
 echo "--------------------------------------------------"
@@ -15,16 +19,15 @@ if [ ! -z "$DASH_PID" ]; then
   echo "✅ Stopped Dashboard on port 3000"
 fi
 
-# 2. Kill Spring Boot (Port 8083)
+# 2. (legacy) kill anything left on the old Spring Boot port 8083 just in case
 SB_PID=$(lsof -t -i:8083)
 if [ ! -z "$SB_PID" ]; then
   kill -9 $SB_PID 2>/dev/null
-  echo "✅ Stopped Spring Boot on port 8083"
+  echo "✅ Stopped legacy process on port 8083 (was Spring Boot)"
 fi
 
 # 3. Extra cleanup for safety
 pkill -f "node server.js" 2>/dev/null
-pkill -f "spring-boot:run" 2>/dev/null
 
 echo ""
 echo "--------------------------------------------------"
@@ -38,20 +41,6 @@ echo "🔍 Checking for Binance Delistings..."
 python3 "$BASE_DIR/delist_detector.py"
 echo ""
 
-# Initialize SDKMAN for Java environment if it exists
-if [ -f "$HOME/.sdkman/bin/sdkman-init.sh" ]; then
-  source "$HOME/.sdkman/bin/sdkman-init.sh"
-fi
-
-# Start Spring Boot in background
-echo "🌱 Starting Spring Boot Backend (book-now-v3)..."
-cd "$BASE_DIR/book-now-v3"
-bash -l -c "mvn spring-boot:run" > backend.log 2>&1 &
-echo "   -> Logging to: book-now-v3/backend.log"
-
-# Small delay
-sleep 5
-
 # Start Dashboard in background
 echo "🖥️  Starting Node.js Dashboard (dashboard)..."
 cd "$BASE_DIR/dashboard"
@@ -62,4 +51,8 @@ echo ""
 echo "--------------------------------------------------"
 echo "🎉 RESTART COMPLETE!"
 echo "📡 URL: http://localhost:3000"
+echo ""
+echo "⚠️  NOTE: Spring Boot backend has been removed. Trading-related"
+echo "    dashboard endpoints (buy/sell/cancel/balances) will return"
+echo "    503 until the Python trading engine is in place."
 echo "--------------------------------------------------"
