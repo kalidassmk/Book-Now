@@ -29,7 +29,7 @@ import asyncio
 import logging
 import signal
 import sys
-from typing import List
+from typing import List, Optional
 
 from booknow.binance.balances import BalanceService
 from booknow.binance.delist import DelistService
@@ -50,6 +50,8 @@ from booknow.config.trading_config import TradingConfigService
 from booknow.rules.rule_one import RuleOne
 from booknow.rules.rule_two import RuleTwo
 from booknow.rules.rule_three import RuleThree
+from booknow.sentiment.supervisor import SentimentSupervisor
+from booknow.sentiment.tasks import SENTIMENT_TASKS
 from booknow.trading.executor import TradeExecutor
 from booknow.trading.monitor import LoggingExecutor, PositionMonitor
 from booknow.trading.state import TradeState
@@ -199,6 +201,39 @@ async def _bootstrap() -> None:
         await r.start()
     log.info("  rules engine started: rule_one (R1-FULL/PARTIAL/ULTRA), rule_two, rule_three")
 
+    # ── Phase 12: sentiment supervisor (subprocesses) ────────────────
+    # Boots the existing binance-sentiment-engine analyzers under a
+    # single Python process. Each runs as an asyncio-managed
+    # subprocess; the supervisor restarts persistent ones on death
+    # and re-runs scheduled ones every interval. Toggle off via
+    # BOOKNOW_SENTIMENT_ENABLED=false to run the trading core alone.
+    sentiment_supervisor: Optional[SentimentSupervisor] = None
+    if settings.sentiment_enabled:
+        from pathlib import Path as _Path
+        if settings.sentiment_dir:
+            sentiment_dir = _Path(settings.sentiment_dir).resolve()
+        else:
+            # python-engine/booknow/main.py
+            #   .parent       → python-engine/booknow
+            #   .parent.parent → python-engine
+            #   .parent.parent.parent → Book-Now
+            sentiment_dir = _Path(__file__).resolve().parent.parent.parent / "binance-sentiment-engine"
+        if not sentiment_dir.exists():
+            log.warning(
+                "  sentiment supervisor SKIPPED — directory not found: %s "
+                "(set BOOKNOW_SENTIMENT_DIR or BOOKNOW_SENTIMENT_ENABLED=false)",
+                sentiment_dir,
+            )
+        else:
+            sentiment_supervisor = SentimentSupervisor(
+                tasks=SENTIMENT_TASKS,
+                sentiment_dir=sentiment_dir,
+            )
+            await sentiment_supervisor.start()
+            log.info("  sentiment supervisor started from %s", sentiment_dir)
+    else:
+        log.info("  sentiment supervisor disabled (BOOKNOW_SENTIMENT_ENABLED=false)")
+
     # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
     dust_service: DustService | None = None
@@ -285,9 +320,17 @@ async def _bootstrap() -> None:
         await stop.wait()
     finally:
         log.info("BookNow Python engine stopping…")
-        # Stop rules first (they call into the executor) then the
-        # position monitor (it also calls the executor) — by the time
-        # we tear executor state down, no caller is mid-flight.
+        # Sentiment supervisor first — its child processes hit Binance
+        # and Redis on their own; let them shut down before we close
+        # things they depend on.
+        if sentiment_supervisor is not None:
+            try:
+                await sentiment_supervisor.stop()
+            except Exception as e:
+                log.warning("  sentiment-supervisor stop error: %s", e)
+        # Rules next (they call into the executor), then position
+        # monitor (also calls the executor) — by the time we tear
+        # executor state down, no caller is mid-flight.
         for r in (rule_three, rule_two, rule_one):
             try:
                 await r.stop()

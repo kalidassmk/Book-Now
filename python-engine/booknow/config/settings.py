@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     # Verbose logging (DEBUG vs INFO).
     debug: bool = Field(default=False, alias="BOOKNOW_DEBUG")
 
+    # ── Sentiment-engine supervisor (Phase 12) ──────────────────────────
+    # When True, the engine spawns the existing
+    # ``binance-sentiment-engine`` analyzers as supervised subprocesses
+    # alongside the trading core. Set to False if you want the engine
+    # to run its own loops only (paper-trade rule testing etc.).
+    sentiment_enabled: bool = Field(default=True, alias="BOOKNOW_SENTIMENT_ENABLED")
+    # Override the directory if the analyzers live somewhere unusual.
+    # Defaults to ``../../binance-sentiment-engine`` relative to this file.
+    sentiment_dir: str = Field(default="", alias="BOOKNOW_SENTIMENT_DIR")
+
     model_config = SettingsConfigDict(
         # Try the engine's own .env first, fall back to the dashboard's.
         # Pydantic ignores entries that are missing.
