@@ -46,6 +46,9 @@ from booknow.processors.fast_move_filter import FastMoveFilter
 from booknow.processors.time_analyser import TimeAnalyser
 from booknow.processors.ulf_0_to_3 import UlfZeroToThree
 from booknow.repository.redis_client import close_redis, get_redis
+from booknow.trading.monitor import LoggingExecutor, PositionMonitor
+from booknow.trading.state import TradeState
+from booknow.trading.tsl import TrailingStopLoss
 
 
 def _configure_logging(debug: bool) -> None:
@@ -125,6 +128,25 @@ async def _bootstrap() -> None:
         await proc.start()
     log.info("  processors started: ulf_0_to_3, fast_analyse, time_analyser, fast_move_filter")
 
+    # ── Phase 9: position state + TSL + unified monitor ──────────────
+    # TradeState is the single source of truth for open positions.
+    # TrailingStopLoss owns per-symbol high-water marks.
+    # PositionMonitor ticks every second, checking TSL + max-hold and
+    # firing forced exits via the executor. Phase 10 plugs in the real
+    # TradeExecutor; until then LoggingExecutor logs intended exits.
+    trade_state = TradeState()
+    tsl = TrailingStopLoss(trailing_percentage=2.0)
+    exit_executor = LoggingExecutor()  # Phase 10 replaces this
+    position_monitor = PositionMonitor(
+        redis_client=redis,
+        trade_state=trade_state,
+        tsl=tsl,
+        executor=exit_executor,
+        max_hold_seconds=300,
+    )
+    await position_monitor.start()
+    log.info("  position-monitor started (TSL=2%%, max-hold=300s, exit=LoggingExecutor stub)")
+
     # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
     dust_service: DustService | None = None
@@ -147,9 +169,40 @@ async def _bootstrap() -> None:
             async def _on_balance_snapshot(balances):
                 await dust_service.evaluate_balances(balances)
 
+            # executionReport callback: when our outstanding limit-sell
+            # at +$0.20 fills on Binance, close the position immediately
+            # (don't wait for the position monitor's next tick to notice).
+            # Sweep dust to BNB after a clean +TARGET HIT.
+            async def _on_execution_report(event):
+                if event.get("X") != "FILLED":
+                    return
+                symbol = event.get("s")
+                order_id = event.get("i")
+                if not symbol or order_id is None:
+                    return
+                pos = trade_state.get_position(symbol)
+                if pos is None:
+                    return
+                if pos.open_sell_order_id is None or pos.open_sell_order_id != order_id:
+                    return
+                price = event.get("p") or event.get("L") or "0"
+                log.info(
+                    "[+TARGET HIT] limit-sell #%s for %s filled @ %s — closing position",
+                    order_id, symbol, price,
+                )
+                trade_state.mark_sold(symbol)
+                tsl.reset(symbol)
+                # Sweep the leftover base-asset dust.
+                base = symbol[:-4] if symbol.endswith("USDT") else symbol
+                try:
+                    await dust_service.sweep_to_bnb(base)
+                except Exception as e:
+                    log.warning("[+TARGET HIT] dust sweep failed for %s: %s", base, e)
+
             user_data = UserDataStreamService(
                 ws_api=ws_api,
                 balance_service=balance_service,
+                on_execution_report=_on_execution_report,
             )
             # Wrap balance-service.apply_account_snapshot so we also
             # tee snapshots into the dust evaluator.
@@ -181,8 +234,13 @@ async def _bootstrap() -> None:
         await stop.wait()
     finally:
         log.info("BookNow Python engine stopping…")
-        # Stop processors first — they read what market_stream writes,
-        # so we'd rather they stop polling than read mid-shutdown.
+        # Stop the position monitor before everything else so a TSL
+        # tick doesn't fire mid-shutdown into an executor that's gone.
+        try:
+            await position_monitor.stop()
+        except Exception as e:
+            log.warning("  position-monitor stop error: %s", e)
+        # Then processors, then market_stream — same reasoning.
         for proc in (fast_move, time_analyser, fast_analyse, ulf):
             try:
                 await proc.stop()
