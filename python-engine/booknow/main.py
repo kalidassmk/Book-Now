@@ -41,6 +41,10 @@ from booknow.binance.user_data import UserDataStreamService
 from booknow.binance.ws_api import WsApiClient
 from booknow.binance.ws_streams import MarketStreamService
 from booknow.config.settings import get_settings
+from booknow.processors.fast_analyse import FastAnalyse
+from booknow.processors.fast_move_filter import FastMoveFilter
+from booknow.processors.time_analyser import TimeAnalyser
+from booknow.processors.ulf_0_to_3 import UlfZeroToThree
 from booknow.repository.redis_client import close_redis, get_redis
 
 
@@ -110,6 +114,17 @@ async def _bootstrap() -> None:
     await market_stream.start()
     log.info("  market-stream task started")
 
+    # ── Phase 8: four processor loops ────────────────────────────────
+    # All four read what market_stream writes and emit derived signals
+    # the rules engine (Phase 11) and dashboards consume.
+    ulf            = UlfZeroToThree(redis_client=redis)
+    fast_analyse   = FastAnalyse(redis_client=redis)
+    time_analyser  = TimeAnalyser(redis_client=redis)
+    fast_move      = FastMoveFilter(redis_client=redis)
+    for proc in (ulf, fast_analyse, time_analyser, fast_move):
+        await proc.start()
+    log.info("  processors started: ulf_0_to_3, fast_analyse, time_analyser, fast_move_filter")
+
     # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
     dust_service: DustService | None = None
@@ -166,6 +181,13 @@ async def _bootstrap() -> None:
         await stop.wait()
     finally:
         log.info("BookNow Python engine stopping…")
+        # Stop processors first — they read what market_stream writes,
+        # so we'd rather they stop polling than read mid-shutdown.
+        for proc in (fast_move, time_analyser, fast_analyse, ulf):
+            try:
+                await proc.stop()
+            except Exception as e:
+                log.warning("  %s stop error: %s", proc.name, e)
         try:
             await market_stream.stop()
         except Exception as e:
