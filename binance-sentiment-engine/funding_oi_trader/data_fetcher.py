@@ -51,5 +51,25 @@ class DataFetcher:
             log.error(f"Error fetching OI history for {symbol}: {e}")
             return None
 
+    async def list_futures_symbols(self):
+        """
+        Return the set of perpetual-swap symbols actually available on
+        Binance Futures (in REST naming, e.g. 'BTCUSDT'). Used to pre-filter
+        a spot-derived watch list so we don't spam -1121 errors every cycle
+        for symbols that simply have no futures market.
+        """
+        try:
+            markets = await self.client.load_markets()
+            available = set()
+            for ccxt_id, m in markets.items():
+                # Keep only USDT-margined perpetual swaps that are currently active.
+                if m.get("type") == "swap" and m.get("active") and m.get("quote") == "USDT":
+                    base = m.get("base") or ""
+                    available.add(f"{base}USDT")
+            return available
+        except Exception as e:
+            log.error(f"Failed to load futures markets: {e}")
+            return None
+
     async def close(self):
         await self.client.close()

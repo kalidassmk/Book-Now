@@ -29,9 +29,25 @@ class FundingOIBot:
         self.redis_client = redis.Redis(host='127.0.0.1', port=6379, decode_responses=True)
 
     async def run(self):
-        log.info(f"🚀 Starting Funding/OI Bot (Resilient CCXT Mode) for symbols: {self.symbols}")
+        log.info(f"🚀 Starting Funding/OI Bot (Resilient CCXT Mode) for {len(self.symbols)} symbols")
         fetcher = DataFetcher()
         try:
+            # ACTIVE_SYMBOLS is sourced from spot-pair discovery; many of those
+            # don't have a futures listing. Resolve the perpetual-swap set
+            # once, intersect, and skip the rest — otherwise every cycle
+            # logs "Invalid symbol" for the same coins forever.
+            futures_set = await fetcher.list_futures_symbols()
+            if futures_set:
+                tradable = [s for s in self.symbols if s in futures_set]
+                dropped  = [s for s in self.symbols if s not in futures_set]
+                if dropped:
+                    log.info(
+                        "Skipping %d symbol(s) without futures listing: %s",
+                        len(dropped), ", ".join(dropped[:10]) + ("…" if len(dropped) > 10 else "")
+                    )
+                self.symbols = tradable
+                log.info("🚀 Watching %d futures-listed symbols", len(self.symbols))
+
             while True:
                 tasks = [self.process_symbol(fetcher, symbol) for symbol in self.symbols]
                 await asyncio.gather(*tasks)
