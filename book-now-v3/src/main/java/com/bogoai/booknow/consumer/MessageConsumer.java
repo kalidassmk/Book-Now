@@ -54,10 +54,44 @@ public class MessageConsumer implements Runnable {
     /** Local copy of the baseline snapshot to avoid round-tripping Redis every tick. */
     private Map<String, RollingWindowTicker1HResponse> baselineCache;
 
+    /**
+     * Set true when {@link #close()} is invoked (typically from
+     * BookNowServiceImpl.@PreDestroy). Once true the run loop exits without
+     * reconnecting and onMarketEvent silently drops further events instead
+     * of dumping a Redis stack trace per tick — the OkHttp dispatcher may
+     * still be flushing buffered messages while the JedisPool tears down.
+     */
+    private volatile boolean shuttingDown = false;
+
+    /** WebSocket bookkeeping so close() can hang up cleanly. */
+    private volatile WebsocketClientImpl wsClient;
+    private volatile int                 wsConnectionId = -1;
+
     public MessageConsumer(BookNowRepository repository) {
         this.repository = repository;
         this.mapper     = new ObjectMapper().configure(FAIL_ON_UNKNOWN_PROPERTIES, false);
         this.delistMap  = deListCoins();
+    }
+
+    /**
+     * Stop the Binance WebSocket cleanly. Callable from any thread.
+     *
+     * Must run BEFORE Spring tears the Redis bean down — otherwise the
+     * OkHttp reader keeps delivering market events into a closed
+     * JedisPool and floods the log with "Pool not open" stack traces.
+     */
+    public void close() {
+        shuttingDown = true;
+        WebsocketClientImpl client = this.wsClient;
+        int id = this.wsConnectionId;
+        if (client != null && id >= 0) {
+            try {
+                client.closeConnection(id);
+                log.info("[WS] MessageConsumer close() — Binance WS closed (id={})", id);
+            } catch (Exception e) {
+                log.warn("[WS] MessageConsumer close() failed cleanly: {}", e.getMessage());
+            }
+        }
     }
 
     @Override
@@ -65,14 +99,14 @@ public class MessageConsumer implements Runnable {
         log.info("=== MessageConsumer starting WebSocket lifecycle ===");
         baselineCache = repository.getAllRWBasePrice(RW_BASE_PRICE);
 
-        while (!Thread.currentThread().isInterrupted()) {
+        while (!Thread.currentThread().isInterrupted() && !shuttingDown) {
             java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            
+
             try {
                 log.info("[WS] Attempting to connect to Binance allRollingWindowTicker (1h)...");
                 WebsocketClientImpl client = new WebsocketClientImpl();
-                
-                client.allRollingWindowTicker(
+
+                int connectionId = client.allRollingWindowTicker(
                     "1h",
                     open -> log.info("[WS] Connection Established ✅"),
                     this::onMarketEvent,
@@ -81,20 +115,38 @@ public class MessageConsumer implements Runnable {
                         latch.countDown();
                     },
                     fail -> {
-                        log.error("[WS] Connection Failed/Reset ❌");
+                        if (shuttingDown) {
+                            log.info("[WS] Connection ended during shutdown");
+                        } else {
+                            log.error("[WS] Connection Failed/Reset ❌");
+                        }
                         latch.countDown();
                     }
                 );
+                this.wsClient        = client;
+                this.wsConnectionId  = connectionId;
 
                 // Block this thread until the connection closes or fails
                 latch.await();
+                this.wsClient        = null;
+                this.wsConnectionId  = -1;
+
+                if (shuttingDown) {
+                    log.info("[WS] Shutdown requested — exiting reconnect loop");
+                    break;
+                }
+
                 log.info("[WS] Connection lost. Reconnecting in 5 seconds...");
                 Thread.sleep(5000);
-                
+
             } catch (InterruptedException e) {
                 log.info("[WS] MessageConsumer interrupted. Shutting down.");
                 break;
             } catch (Exception e) {
+                if (shuttingDown) {
+                    log.debug("[WS] Connection error during shutdown: {}", e.getMessage());
+                    break;
+                }
                 log.error("[WS] Unexpected error in connection loop: {}", e.getMessage());
                 try { Thread.sleep(5000); } catch (InterruptedException ie) { break; }
             }
@@ -104,6 +156,12 @@ public class MessageConsumer implements Runnable {
     // ── WebSocket event handler ───────────────────────────────────────────────
 
     private void onMarketEvent(String rawJson) {
+        // Drop events that race in after close() — Spring may already have
+        // torn the Redis bean down, so any repository read would explode
+        // with "Pool not open" and flood the log with stack traces.
+        if (shuttingDown) {
+            return;
+        }
         try {
             List<RollingWindowTicker1HResponse> tickers = parseAndFilter(rawJson);
             Map<String, CurrentPrice>           priceMap    = repository.getAllCurrentPrice(CURRENT_PRICE);
@@ -112,6 +170,11 @@ public class MessageConsumer implements Runnable {
             for (RollingWindowTicker1HResponse ticker : tickers) {
                 processTicker(ticker, priceMap, fastMoveMap);
             }
+        } catch (org.springframework.data.redis.RedisConnectionFailureException e) {
+            // Pool dying mid-stream: log a single line, no stack trace,
+            // no per-event spam. The reconnect path will recover or
+            // shutdown will complete shortly.
+            log.warn("[WS] Skip market event — Redis pool unavailable ({})", e.getMessage());
         } catch (Exception e) {
             log.error("Error processing market event: {}", e.getMessage(), e);
         }

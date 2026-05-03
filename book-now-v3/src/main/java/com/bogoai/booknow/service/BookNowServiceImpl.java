@@ -45,8 +45,16 @@ public class BookNowServiceImpl implements BookNowService {
     @Autowired private TradingConfigService   configService;
     @Autowired private TradeState             tradeState;
 
-    private ExecutorService    executor;
+    private ExecutorService     executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
+
+    /**
+     * Held so {@link #stop()} can hang up the Binance market WebSocket
+     * before the executor (and Redis bean) are torn down. Without this,
+     * OkHttp-driven {@code onMarketEvent} keeps firing into a closed
+     * JedisPool and floods the log with "Pool not open" stack traces.
+     */
+    private MessageConsumer messageConsumer;
 
     @Override
     public boolean allRollingWindowTicker() {
@@ -65,7 +73,8 @@ public class BookNowServiceImpl implements BookNowService {
         });
 
         // ── Data ingestion ────────────────────────────────────────────────────
-        executor.submit(new MessageConsumer(repository));
+        this.messageConsumer = new MessageConsumer(repository);
+        executor.submit(this.messageConsumer);
 
         // ── Processors ───────────────────────────────────────────────────────
         executor.submit(new ULF0To3(repository));
@@ -93,10 +102,23 @@ public class BookNowServiceImpl implements BookNowService {
     @PreDestroy
     public void stop() {
         if (running.compareAndSet(true, false) && executor != null) {
-            log.info("=== BookNow pipeline stopping — interrupting threads ===");
+            log.info("=== BookNow pipeline stopping ===");
+
+            // Step 1: hang up the Binance market WS FIRST. The OkHttp
+            // dispatcher runs on its own threads (not in our executor), so
+            // shutting the executor down doesn't stop incoming messages —
+            // they keep arriving until the socket itself is closed. If
+            // Spring tears the Redis bean down before then, every late
+            // event explodes with "Pool not open".
+            if (messageConsumer != null) {
+                messageConsumer.close();
+            }
+
+            // Step 2: stop the rule/processor threads. They're still
+            // talking to Redis at this point, so this must happen while
+            // the JedisPool is open.
             executor.shutdownNow();
             try {
-                // Wait up to 5 seconds for threads to finish current Redis ops
                 if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                     log.warn("Some threads did not stop in time — forcing shutdown");
                 }
