@@ -32,6 +32,9 @@ public class BinanceFilterService {
     @Autowired
     private RedisTemplate<String, SymbolRule> redisTemplateSymbolRule;
 
+    @Autowired
+    private BinanceRateLimitGuard rateLimitGuard;
+
     @PostConstruct
     public void init() {
         log.info("[FilterService] Initializing startup cache...");
@@ -43,6 +46,11 @@ public class BinanceFilterService {
      */
     @Scheduled(fixedRate = 3600000) // Every 1 hour
     public void refreshCache() {
+        if (rateLimitGuard.isBanned()) {
+            log.warn("[FilterService] Skipping exchangeInfo refresh — Binance ban active for {}s",
+                rateLimitGuard.banRemainingSeconds());
+            return;
+        }
         try {
             log.info("[FilterService] Refreshing ALL symbols from Binance...");
             ExchangeInfo info = prodBinanceApiARestClient.getExchangeInfo();
@@ -58,6 +66,7 @@ public class BinanceFilterService {
                 log.info("[FilterService] Redis cache updated. Loaded {} USDT symbols.", count);
             }
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) return;
             log.error("[FilterService] CRITICAL: Failed to refresh exchange info: {}", e.getMessage());
         }
     }
@@ -76,6 +85,14 @@ public class BinanceFilterService {
             return rule;
         }
 
+        if (rateLimitGuard.isBanned()) {
+            // Don't even attempt the on-demand fetch — it will fail and
+            // potentially extend the ban. Surface a clear error to the
+            // caller so the trade aborts cleanly.
+            throw new RuntimeException("❌ Binance ban active (" + rateLimitGuard.banRemainingSeconds()
+                + "s remaining). Cannot fetch filter data for " + symbol + ". Trade aborted for safety.");
+        }
+
         log.debug("[FilterService] [CACHE_MISS] [{}] Fetching on-demand...", symbol);
         try {
             ExchangeInfo info = prodBinanceApiARestClient.getExchangeInfo();
@@ -90,6 +107,10 @@ public class BinanceFilterService {
                 }
             }
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) {
+                throw new RuntimeException("❌ Binance ban triggered while fetching " + symbol
+                    + ". Trade aborted; cool-down: " + rateLimitGuard.banRemainingSeconds() + "s.", e);
+            }
             log.error("[FilterService] [ON_DEMAND_ERROR] [{}] Fetch failed: {}", symbol, e.getMessage());
         }
 

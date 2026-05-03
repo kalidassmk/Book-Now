@@ -30,6 +30,9 @@ public class BinanceDelistService {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private BinanceRateLimitGuard rateLimitGuard;
+
     private final RestTemplate restTemplate = new RestTemplate();
     private final Set<String> processedCodes = new HashSet<>();
 
@@ -40,6 +43,11 @@ public class BinanceDelistService {
 
     @Scheduled(fixedRate = 21600000)
     public void checkDelistings() {
+        if (rateLimitGuard.isBanned()) {
+            log.debug("[DelistService] Skipping announcement scan — Binance ban active for {}s",
+                rateLimitGuard.banRemainingSeconds());
+            return;
+        }
         try {
             log.info("[DelistService] Checking Binance announcements for delistings...");
             processedCodes.clear();
@@ -59,6 +67,7 @@ public class BinanceDelistService {
                 }
             }
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) return;
             log.error("[DelistService] Error checking delistings: {}", e.getMessage());
         }
     }

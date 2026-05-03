@@ -34,6 +34,9 @@ public class BinanceDustService {
     @Autowired
     private BinanceFilterService filterService;
 
+    @Autowired
+    private BinanceRateLimitGuard rateLimitGuard;
+
     @PostConstruct
     public void init() {
         detectDust();
@@ -48,6 +51,11 @@ public class BinanceDustService {
      */
     @Scheduled(fixedRate = 300_000)
     public void detectDust() {
+        if (rateLimitGuard.isBanned()) {
+            log.debug("[DustService] Skipping scan — Binance ban active for {}s more",
+                rateLimitGuard.banRemainingSeconds());
+            return;
+        }
         try {
             log.info("[DustService] Scanning for dust balances...");
             Account account = prodBinanceApiARestClient.getAccount();
@@ -94,6 +102,7 @@ public class BinanceDustService {
             }
             log.info("[DustService] Scan complete. Found {} dust assets.", count);
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) return;
             log.error("[DustService] Error scanning for dust: {}", e.getMessage());
         }
     }
@@ -108,12 +117,14 @@ public class BinanceDustService {
      */
     @Scheduled(fixedRate = 10000)
     public void autoTransferDust() {
+        if (rateLimitGuard.isBanned()) return;
         try {
             Set<String> keys = redisTemplateDustAsset.keys(REDIS_KEY_PREFIX + "*");
             if (keys == null || keys.isEmpty()) return;
 
             log.info("[DustService] Auto-transfer job found {} dust assets to process...", keys.size());
             for (String key : keys) {
+                if (rateLimitGuard.isBanned()) return;
                 DustAsset d = redisTemplateDustAsset.opsForValue().get(key);
                 if (d == null) continue;
 
@@ -125,22 +136,24 @@ public class BinanceDustService {
 
                 try {
                     // FUNDING_MAIN moves from Funding to Spot
-                    com.bogoai.api.client.domain.account.UniversalTransferResult result = 
+                    com.bogoai.api.client.domain.account.UniversalTransferResult result =
                         prodBinanceApiARestClient.universalTransfer(asset, com.bogoai.api.client.domain.UniversalTransferType.FUNDING_MAIN, d.getFree());
-                    
+
                     if (result != null && result.getTranId() != null) {
                         log.info("[DustService] SUCCESS: Transferred {} to Spot Wallet. ID: {}", asset, result.getTranId());
                         removeDust(asset);
                     }
                 } catch (Exception e) {
+                    if (rateLimitGuard.reportIfBanned(e)) return;
                     log.error("[DustService] Transfer failed for {}: {}", asset, e.getMessage());
                     // Keep in Redis to retry next time
                 }
-                
+
                 // Small sleep to be safe between multiple transfers
                 Thread.sleep(500);
             }
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) return;
             log.error("[DustService] Auto-transfer job encountered an error: {}", e.getMessage());
         }
     }
@@ -151,12 +164,18 @@ public class BinanceDustService {
      */
     public void sweepToBnb(String asset) {
         if ("BNB".equalsIgnoreCase(asset) || "USDT".equalsIgnoreCase(asset)) return;
+        if (rateLimitGuard.isBanned()) {
+            log.warn("[DustService] sweepToBnb({}) deferred — Binance ban active for {}s",
+                asset, rateLimitGuard.banRemainingSeconds());
+            return;
+        }
         
         try {
             log.info("[DustService] Requesting BNB conversion for {}...", asset);
             Object result = prodBinanceApiARestClient.dustTransfer(java.util.Collections.singletonList(asset));
             log.info("[DustService] SUCCESS: Converted {} dust to BNB. Result: {}", asset, result);
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) return;
             log.error("[DustService] BNB conversion failed for {}: {}", asset, e.getMessage());
         }
     }

@@ -8,12 +8,10 @@ import com.bogoai.api.client.domain.event.OrderTradeUpdateEvent;
 import com.bogoai.api.client.domain.event.UserDataUpdateEvent;
 import com.bogoai.booknow.model.CurrentPrice;
 import com.bogoai.booknow.model.Sell;
-import com.bogoai.booknow.model.WalletBalance;
 import com.bogoai.booknow.repository.BookNowRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -57,14 +55,13 @@ import static com.bogoai.booknow.util.Constant.SELL_KEY;
 @Service
 public class BinanceUserDataStreamService {
 
-    private static final String REDIS_KEY_PREFIX = "BINANCE:BALANCE:";
-
     @Autowired private BinanceApiWebSocketClient   prodBinanceApiWebSocketClient;
-    @Autowired private RedisTemplate<String, WalletBalance> redisTemplateWalletBalance;
     @Autowired private TradeState                  tradeState;
     @Autowired private TrailingStopLossService     tslService;
     @Autowired private BookNowRepository           repository;
     @Autowired private BinanceDustService          binanceDustService;
+    @Autowired private BinanceBalanceService       balanceService;
+    @Autowired private BinanceRateLimitGuard       rateLimitGuard;
 
     /** Same toggle TradeExecutor uses — disable the stream entirely in paper mode. */
     @Value("${trading.live-mode:false}")
@@ -74,14 +71,6 @@ public class BinanceUserDataStreamService {
     private String prodApiKey;
 
     private final BinanceWsApiClient wsApi = new BinanceWsApiClient();
-
-    /**
-     * Epoch-ms after which it is OK to talk to Binance again. While
-     * {@link BinanceWsApiClient.BinanceIpBannedException} is being thrown,
-     * we set this to (now + Retry-After) so subsequent keepalive ticks
-     * skip the connect attempt instead of digging the ban deeper.
-     */
-    private final java.util.concurrent.atomic.AtomicLong banUntilMs = new java.util.concurrent.atomic.AtomicLong(0);
 
     /** Latest listenKey we obtained from Binance. */
     private final AtomicReference<String> listenKey = new AtomicReference<>();
@@ -121,10 +110,9 @@ public class BinanceUserDataStreamService {
     @Scheduled(fixedRate = 25 * 60 * 1000L)
     public void keepAlive() {
         if (!liveMode) return;
-        long until = banUntilMs.get();
-        if (until > 0 && System.currentTimeMillis() < until) {
-            long secsLeft = (until - System.currentTimeMillis()) / 1000;
-            log.warn("[UserDataStream] IP-banned by Binance — sleeping ~{}s before retry", secsLeft);
+        if (rateLimitGuard.isBanned()) {
+            log.warn("[UserDataStream] Skipping keepalive — Binance ban active for {}s",
+                rateLimitGuard.banRemainingSeconds());
             return;
         }
         String key = listenKey.get();
@@ -137,6 +125,11 @@ public class BinanceUserDataStreamService {
             wsApi.keepAliveUserDataStream(prodApiKey, key);
             log.debug("[UserDataStream] Keepalive ping OK");
         } catch (Exception e) {
+            if (rateLimitGuard.reportIfBanned(e)) {
+                closeSocketQuietly();
+                listenKey.set(null);
+                return;
+            }
             log.warn("[UserDataStream] Keepalive failed ({}). Forcing reconnect.", e.getMessage());
             closeSocketQuietly();
             listenKey.set(null);
@@ -157,26 +150,19 @@ public class BinanceUserDataStreamService {
             closeQuietly(old);
             log.info("[UserDataStream] Websocket subscribed — balance + order updates are now push-driven");
         } catch (BinanceWsApiClient.BinanceIpBannedException ban) {
-            // Don't dump a stack trace — this is a known, expected,
-            // operator-actionable condition. Mark the cool-down so the
-            // keepalive scheduler skips the next N ticks.
             long retry = ban.retryAfterSeconds > 0 ? ban.retryAfterSeconds : 120;
-            banUntilMs.set(System.currentTimeMillis() + retry * 1000L);
-            log.error("[UserDataStream] Binance IP BAN active — will retry in ~{}s. "
-                + "Cause: too many recent requests (HTTP 418/429). Stop other Binance clients "
-                + "and let the cooldown elapse.", retry);
+            rateLimitGuard.recordBanUntil(System.currentTimeMillis() + retry * 1000L,
+                "WS-API userDataStream.start returned " + ban.getMessage());
             closeSocketQuietly();
             listenKey.set(null);
         } catch (Exception e) {
-            // Special-case ban exceptions wrapped in another runtime
-            if (BinanceWsApiClient.isIpBan(e)) {
-                long retry = BinanceWsApiClient.extractRetryAfterSeconds(e);
-                if (retry <= 0) retry = 120;
-                banUntilMs.set(System.currentTimeMillis() + retry * 1000L);
-                log.error("[UserDataStream] Binance IP BAN active — will retry in ~{}s.", retry);
-            } else {
-                log.error("[UserDataStream] Failed to connect: {}. Will retry on next keepalive.", e.getMessage(), e);
+            // Catch ban-flavoured runtime exceptions wrapped by other layers.
+            if (BinanceWsApiClient.isIpBan(e) || rateLimitGuard.reportIfBanned(e)) {
+                closeSocketQuietly();
+                listenKey.set(null);
+                return;
             }
+            log.error("[UserDataStream] Failed to connect: {}. Will retry on next keepalive.", e.getMessage(), e);
             closeSocketQuietly();
             listenKey.set(null);
         }
@@ -219,47 +205,20 @@ public class BinanceUserDataStreamService {
         }
     }
 
-    /** Snapshot of all non-zero balances, pushed by Binance after every state change. */
+    /**
+     * Snapshot of all non-zero balances, pushed by Binance after every
+     * account state change. Delegates to {@link BinanceBalanceService} so
+     * the Redis schema lives in one place.
+     */
     private void onAccountUpdate(AccountUpdateEvent ev) {
         if (ev == null || ev.getBalances() == null) return;
-        long now = System.currentTimeMillis();
-        int changed = 0;
-        for (com.bogoai.api.client.domain.account.AssetBalance b : ev.getBalances()) {
-            double free = parseDouble(b.getFree());
-            double locked = parseDouble(b.getLocked());
-            if (free <= 0 && locked <= 0) {
-                // Asset went to zero — drop it from the cache so it's not stale.
-                redisTemplateWalletBalance.delete(REDIS_KEY_PREFIX + b.getAsset());
-                continue;
-            }
-            WalletBalance model = new WalletBalance(b.getAsset(), b.getFree(), b.getLocked(), now);
-            redisTemplateWalletBalance.opsForValue().set(REDIS_KEY_PREFIX + b.getAsset(), model);
-            changed++;
-        }
-        log.debug("[UserDataStream] account update — {} assets refreshed", changed);
+        balanceService.applyAccountSnapshot(ev.getBalances());
     }
 
-    /**
-     * Single-asset delta. Apply to the cached WalletBalance if present;
-     * otherwise the next account snapshot will fill it in.
-     */
+    /** Single-asset delta. */
     private void onBalanceUpdate(BalanceUpdateEvent ev) {
         if (ev == null || ev.getAsset() == null) return;
-        String key = REDIS_KEY_PREFIX + ev.getAsset();
-        WalletBalance cur = redisTemplateWalletBalance.opsForValue().get(key);
-        if (cur == null) {
-            log.debug("[UserDataStream] balanceUpdate {} delta={} (no cached row, will sync on next snapshot)",
-                ev.getAsset(), ev.getBalanceDelta());
-            return;
-        }
-        try {
-            BigDecimal newFree = new BigDecimal(cur.getFree()).add(new BigDecimal(ev.getBalanceDelta()));
-            cur.setFree(newFree.toPlainString());
-            cur.setUpdatedAt(System.currentTimeMillis());
-            redisTemplateWalletBalance.opsForValue().set(key, cur);
-        } catch (NumberFormatException e) {
-            log.warn("[UserDataStream] Bad balance delta for {}: {}", ev.getAsset(), ev.getBalanceDelta());
-        }
+        balanceService.applyBalanceDelta(ev.getAsset(), ev.getBalanceDelta());
     }
 
     /**
