@@ -1,6 +1,5 @@
 package com.bogoai.booknow.util;
 
-import com.bogoai.api.client.BinanceApiRestClient;
 import com.bogoai.api.client.BinanceApiWebSocketClient;
 import com.bogoai.api.client.domain.OrderStatus;
 import com.bogoai.api.client.domain.event.AccountUpdateEvent;
@@ -24,7 +23,6 @@ import java.io.Closeable;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.bogoai.booknow.util.Constant.BUY_KEY;
@@ -40,14 +38,20 @@ import static com.bogoai.booknow.util.Constant.SELL_KEY;
  *     → real-time {@code executionReport} pushes.
  *
  * Lifecycle:
- *   1. {@link #start()} (PostConstruct) calls REST {@code startUserDataStream}
- *      to obtain a 60-minute listenKey, then opens a websocket subscription.
- *   2. A scheduled task pings {@code keepAliveUserDataStream} every 25 minutes
+ *   1. {@link #start()} (PostConstruct) sends {@code userDataStream.start}
+ *      over Binance's WS-API to obtain a 60-minute listenKey, then opens a
+ *      websocket subscription on the streams endpoint.
+ *   2. A scheduled task sends {@code userDataStream.ping} every 25 minutes
  *      to extend the key's TTL (Binance recommends 30m; 25m gives a margin).
  *   3. On websocket failure, the next keepalive tick rebuilds the key + socket.
- *   4. {@link #stop()} (PreDestroy) closes the socket and the listenKey so
- *      Binance can reclaim the slot — important because each account has a
+ *   4. {@link #stop()} (PreDestroy) closes the socket and {@code .stop}'s
+ *      the listenKey so Binance can reclaim the slot — each account has a
  *      small cap on concurrent listenKeys.
+ *
+ * Note: Binance retired the legacy REST {@code POST/PUT/DELETE
+ * /api/v3/userDataStream} endpoints (returns 410 Gone). The bundled SDK's
+ * {@code BinanceApiRestClient.startUserDataStream()} still hits those dead
+ * URLs, so we go through {@link BinanceWsApiClient} instead.
  */
 @Slf4j
 @Service
@@ -55,7 +59,6 @@ public class BinanceUserDataStreamService {
 
     private static final String REDIS_KEY_PREFIX = "BINANCE:BALANCE:";
 
-    @Autowired private BinanceApiRestClient        prodBinanceApiARestClient;
     @Autowired private BinanceApiWebSocketClient   prodBinanceApiWebSocketClient;
     @Autowired private RedisTemplate<String, WalletBalance> redisTemplateWalletBalance;
     @Autowired private TradeState                  tradeState;
@@ -66,6 +69,11 @@ public class BinanceUserDataStreamService {
     /** Same toggle TradeExecutor uses — disable the stream entirely in paper mode. */
     @Value("${trading.live-mode:false}")
     private boolean liveMode;
+
+    @Value("${prod.api.key}")
+    private String prodApiKey;
+
+    private final BinanceWsApiClient wsApi = new BinanceWsApiClient();
 
     /** Latest listenKey we obtained from Binance. */
     private final AtomicReference<String> listenKey = new AtomicReference<>();
@@ -88,7 +96,7 @@ public class BinanceUserDataStreamService {
         String key = listenKey.getAndSet(null);
         if (key != null) {
             try {
-                prodBinanceApiARestClient.closeUserDataStream(key);
+                wsApi.closeUserDataStream(prodApiKey, key);
                 log.info("[UserDataStream] Closed listenKey on shutdown");
             } catch (Exception e) {
                 log.warn("[UserDataStream] Error closing listenKey on shutdown: {}", e.getMessage());
@@ -112,7 +120,7 @@ public class BinanceUserDataStreamService {
             return;
         }
         try {
-            prodBinanceApiARestClient.keepAliveUserDataStream(key);
+            wsApi.keepAliveUserDataStream(prodApiKey, key);
             log.debug("[UserDataStream] Keepalive ping OK");
         } catch (Exception e) {
             log.warn("[UserDataStream] Keepalive failed ({}). Forcing reconnect.", e.getMessage());
@@ -126,7 +134,7 @@ public class BinanceUserDataStreamService {
 
     private synchronized void connect() {
         try {
-            String key = prodBinanceApiARestClient.startUserDataStream();
+            String key = wsApi.startUserDataStream(prodApiKey);
             listenKey.set(key);
             log.info("[UserDataStream] Obtained listenKey={}...{}", safeHead(key), safeTail(key));
 

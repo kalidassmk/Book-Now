@@ -6,6 +6,12 @@ let API_KEY = process.env.BINANCE_API_KEY;
 let SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 const BASE_URL = 'https://api.binance.com';
 
+// Binance deprecated POST/PUT/DELETE /api/v3/userDataStream (returns 410 Gone).
+// The replacement is the WebSocket API: send `userDataStream.start` /
+// `userDataStream.ping` over a short-lived connection to ws-api.binance.com
+// and use the returned listenKey on the regular stream.binance.com socket.
+const WS_API_URL = 'wss://ws-api.binance.com:443/ws-api/v3';
+
 const redis = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: process.env.REDIS_PORT || 6379
@@ -42,32 +48,59 @@ async function loadCredentials() {
     }
 }
 
-// 🔹 Step 1: Create Listen Key
-async function createListenKey() {
-    try {
-        console.log('🔑 Requesting UserDataStream ListenKey...');
-        const response = await fetch(`${BASE_URL}/api/v3/userDataStream`, {
-            method: 'POST',
-            headers: { 'X-MBX-APIKEY': API_KEY }
+// Send a single request/response pair over a short-lived WS-API connection.
+// Used for both `userDataStream.start` (one-shot on boot) and
+// `userDataStream.ping` (every 25 min keepalive). Each call opens, sends,
+// reads one frame, and closes — there's nothing else to multiplex here.
+function wsApiCall(method, params = {}, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        const id = `${method}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        const sock = new WebSocket(WS_API_URL);
+        const timer = setTimeout(() => {
+            try { sock.terminate(); } catch (_) {}
+            reject(new Error(`WS-API ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        sock.on('open', () => {
+            sock.send(JSON.stringify({ id, method, params }));
         });
-        
-        const rawText = await response.text();
-        let data;
-        try {
-            data = JSON.parse(rawText);
-        } catch (e) {
-            console.error('❌ Failed to parse Binance response as JSON. Raw response:', rawText.substring(0, 500));
-            throw new Error(`Invalid JSON response (Status: ${response.status})`);
+        sock.on('message', (raw) => {
+            clearTimeout(timer);
+            try { sock.close(); } catch (_) {}
+            let msg;
+            try { msg = JSON.parse(raw); }
+            catch (e) { return reject(new Error(`WS-API ${method} non-JSON reply: ${raw.toString().slice(0, 200)}`)); }
+            if (msg.status && msg.status >= 400) {
+                const errMsg = msg.error?.msg || msg.error?.message || JSON.stringify(msg.error || msg);
+                return reject(new Error(`WS-API ${method} ${msg.status}: ${errMsg}`));
+            }
+            resolve(msg.result || {});
+        });
+        sock.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+    });
+}
+
+// 🔹 Step 1: Create Listen Key (via WebSocket API — REST endpoint is 410 Gone)
+async function createListenKey() {
+    if (!API_KEY) {
+        console.warn('⚠️ Cannot create ListenKey — BINANCE_API_KEY is not set.');
+        return null;
+    }
+    try {
+        console.log('🔑 Requesting UserDataStream ListenKey via WS-API...');
+        const result = await wsApiCall('userDataStream.start', { apiKey: API_KEY });
+        if (!result.listenKey) {
+            throw new Error(`No listenKey in WS-API response: ${JSON.stringify(result)}`);
         }
-        
-        if (!response.ok) throw new Error(data.msg || `Failed to create ListenKey (Status: ${response.status})`);
-        
-        listenKey = data.listenKey;
+        listenKey = result.listenKey;
         console.log('✅ UserDataStream ListenKey created:', listenKey);
         return listenKey;
     } catch (err) {
         console.error('❌ Failed to create ListenKey:', err.message);
-        if (err.message.includes('418')) {
+        if (err.message && err.message.includes('418')) {
             console.error('🚫 IP Banned (418). Cooling down for 60s before retry...');
             setTimeout(createListenKey, 60000);
         }
@@ -75,26 +108,16 @@ async function createListenKey() {
     }
 }
 
-// 🔹 Step 2: Keep Alive (every 25 mins)
+// 🔹 Step 2: Keep Alive (every 25 mins, via WS-API)
 async function keepAlive() {
-    if (!listenKey) return;
+    if (!listenKey || !API_KEY) return;
     try {
-        const url = `${BASE_URL}/api/v3/userDataStream?listenKey=${listenKey}`;
-        const response = await fetch(url, {
-            method: 'PUT',
-            headers: { 'X-MBX-APIKEY': API_KEY }
-        });
-        
-        if (response.ok) {
-            console.log('🔄 UserDataStream ListenKey refreshed');
-        } else {
-            const data = await response.json();
-            throw new Error(data.msg || 'KeepAlive failed');
-        }
+        await wsApiCall('userDataStream.ping', { apiKey: API_KEY, listenKey });
+        console.log('🔄 UserDataStream ListenKey refreshed');
     } catch (err) {
         console.error('⚠️ KeepAlive Error:', err.message);
-        // If expired (404), try to recreate
-        if (err.message.includes('not found') || err.message.includes('404')) {
+        // If the key expired or was reaped, recreate and reconnect the events socket.
+        if (/not found|404|listenKey/i.test(err.message)) {
             console.log('🔄 ListenKey expired, recreating...');
             const key = await createListenKey();
             if (key) connectWS();
