@@ -38,22 +38,30 @@ class FeeIntelligenceUtil:
         }
 
     def run_and_store(self):
-        # Store a lookup table in Redis for the UI
+        # Store a lookup table in Redis for the UI.
+        # Includes the active trading config (12 USDT / +$0.20) plus a few
+        # alternative budgets so the dashboard can show what fees look like
+        # for larger plans.
         configs = [
+            {"inv": 12,  "target": 0.20},   # actual fast-scalp config
             {"inv": 100, "target": 0.05},
             {"inv": 100, "target": 0.10},
             {"inv": 100, "target": 0.20},
-            {"inv": 100, "target": 0.50}
+            {"inv": 100, "target": 0.50},
         ]
-        
+
+        # Format the target with two decimals so keys are stable across
+        # values like 0.20 vs 0.2 (Python's default float repr drops the
+        # trailing zero, which would break dictionary lookups).
         results = {}
         for c in configs:
-            key = f"fee_plan_{c['inv']}_{c['target']}"
+            key = f"fee_plan_{c['inv']}_{c['target']:.2f}"
             results[key] = self.calculate_net_targets(c['inv'], c['target'])
-            
+
         self.r.set("TRADING_FEE_INTELLIGENCE", json.dumps(results))
         print("✅ Fee Intelligence calculated and stored in Redis.")
-        print(f"Sample (12 USDT, 0.20 Profit): {results['fee_plan_12_0.20']}")
+        sample_key = f"fee_plan_12_{0.20:.2f}"
+        print(f"Sample (12 USDT, 0.20 Profit): {results[sample_key]}")
 
 if __name__ == "__main__":
     util = FeeIntelligenceUtil()
