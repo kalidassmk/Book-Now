@@ -47,6 +47,9 @@ from booknow.processors.time_analyser import TimeAnalyser
 from booknow.processors.ulf_0_to_3 import UlfZeroToThree
 from booknow.repository.redis_client import close_redis, get_redis
 from booknow.config.trading_config import TradingConfigService
+from booknow.rules.rule_one import RuleOne
+from booknow.rules.rule_two import RuleTwo
+from booknow.rules.rule_three import RuleThree
 from booknow.trading.executor import TradeExecutor
 from booknow.trading.monitor import LoggingExecutor, PositionMonitor
 from booknow.trading.state import TradeState
@@ -181,6 +184,21 @@ async def _bootstrap() -> None:
         initial_config.tslPct, initial_config.maxHoldSeconds,
     )
 
+    # ── Phase 11: Rules engine — R1 / R2 / R3 ────────────────────────
+    # Each reads ST*/CURRENT_PRICE and calls trade_executor.try_buy()
+    # when its pattern fires. Sell-listeners on TradeState clear the
+    # per-symbol triggered guard on close so the same coin can be
+    # scalped again on the next signal.
+    rule_one   = RuleOne(   redis_client=redis, trade_state=trade_state,
+                            trade_executor=trade_executor, config_service=config_service)
+    rule_two   = RuleTwo(   redis_client=redis, trade_state=trade_state,
+                            trade_executor=trade_executor, config_service=config_service)
+    rule_three = RuleThree( redis_client=redis, trade_state=trade_state,
+                            trade_executor=trade_executor, config_service=config_service)
+    for r in (rule_one, rule_two, rule_three):
+        await r.start()
+    log.info("  rules engine started: rule_one (R1-FULL/PARTIAL/ULTRA), rule_two, rule_three")
+
     # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
     dust_service: DustService | None = None
@@ -267,8 +285,14 @@ async def _bootstrap() -> None:
         await stop.wait()
     finally:
         log.info("BookNow Python engine stopping…")
-        # Stop the position monitor before everything else so a TSL
-        # tick doesn't fire mid-shutdown into an executor that's gone.
+        # Stop rules first (they call into the executor) then the
+        # position monitor (it also calls the executor) — by the time
+        # we tear executor state down, no caller is mid-flight.
+        for r in (rule_three, rule_two, rule_one):
+            try:
+                await r.stop()
+            except Exception as e:
+                log.warning("  %s stop error: %s", r.name, e)
         try:
             await position_monitor.stop()
         except Exception as e:
