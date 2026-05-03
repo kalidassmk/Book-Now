@@ -32,7 +32,11 @@ import sys
 from typing import List
 
 from booknow.binance.balances import BalanceService
+from booknow.binance.delist import DelistService
+from booknow.binance.dust import DustService
+from booknow.binance.filters import FilterService
 from booknow.binance.rate_limit import get_default as get_rate_limit_guard
+from booknow.binance.rest_api import RestApiClient
 from booknow.binance.user_data import UserDataStreamService
 from booknow.binance.ws_api import WsApiClient
 from booknow.binance.ws_streams import MarketStreamService
@@ -78,35 +82,73 @@ async def _bootstrap() -> None:
     except Exception as e:
         log.warning("  redis ping FAILED: %s — continuing; tasks may fail until Redis is up", e)
 
+    # ── Phase 6: shared REST client + cache services ─────────────────
+    rest = RestApiClient(
+        api_key=settings.binance_api_key,
+        secret_key=settings.binance_secret_key,
+    )
+
+    # FilterService + DelistService run regardless of live_mode — both
+    # only hit public endpoints and the rest of the engine reads their
+    # caches before placing any order.
+    filter_service = FilterService(redis_client=redis, rest=rest)
+    await filter_service.start()
+    log.info("  filter-service task started")
+
+    delist_service = DelistService(redis_client=redis, rest=rest)
+    await delist_service.start()
+    log.info("  delist-service task started (current set: %d symbols)",
+             len(await delist_service.get_set()))
+
     # ── Phase 5: market data fan-in (always on, public stream) ───────
-    # Subscribes to !ticker_1h@arr and writes CURRENT_PRICE / FAST_MOVE /
-    # WATCH_ALL / per-bucket Percentage hashes into Redis. This is the
-    # foundation everything else (rules, processors, sentiment) reads.
-    market_stream = MarketStreamService(redis_client=redis)
+    # Pulls its delist set from DelistService so newly-announced removals
+    # propagate without a restart.
+    market_stream = MarketStreamService(
+        redis_client=redis,
+        delist=await delist_service.get_set(),
+    )
     await market_stream.start()
     log.info("  market-stream task started")
 
-    # ── Phase 4: user-data-stream (live mode only) ───────────────────
+    # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
+    dust_service: DustService | None = None
     if settings.live_mode:
         if not (settings.binance_api_key and settings.binance_secret_key):
-            log.error("  live_mode=True but Binance keys missing — user-data-stream disabled")
+            log.error("  live_mode=True but Binance keys missing — user-data-stream + dust disabled")
         else:
             ws_api = WsApiClient(
                 api_key=settings.binance_api_key,
                 secret_key=settings.binance_secret_key,
             )
             balance_service = BalanceService(redis_client=redis, ws_api=ws_api)
+            dust_service = DustService(
+                redis_client=redis, rest=rest, filter_service=filter_service,
+            )
+            await dust_service.start()
+
+            # User-data-stream pushes balance updates to BalanceService
+            # AND triggers DustService's per-account dust evaluation.
+            async def _on_balance_snapshot(balances):
+                await dust_service.evaluate_balances(balances)
+
             user_data = UserDataStreamService(
                 ws_api=ws_api,
                 balance_service=balance_service,
             )
-            # One-shot REST seed before WS subscribes (guard-protected).
+            # Wrap balance-service.apply_account_snapshot so we also
+            # tee snapshots into the dust evaluator.
+            original_apply = balance_service.apply_account_snapshot
+            async def _apply_and_dust(balances):
+                await original_apply(balances)
+                await dust_service.evaluate_balances(balances)
+            balance_service.apply_account_snapshot = _apply_and_dust  # type: ignore[assignment]
+
             await balance_service.seed_from_rest()
             await user_data.start()
-            log.info("  user-data-stream task started")
+            log.info("  user-data-stream + dust-service started")
     else:
-        log.info("  user-data-stream skipped (live_mode=False)")
+        log.info("  user-data-stream + dust-service skipped (live_mode=False)")
 
     log.info("Engine running. Press Ctrl-C to stop.")
 
@@ -133,6 +175,23 @@ async def _bootstrap() -> None:
                 await user_data.stop()
             except Exception as e:
                 log.warning("  user-data-stream stop error: %s", e)
+        if dust_service is not None:
+            try:
+                await dust_service.stop()
+            except Exception as e:
+                log.warning("  dust-service stop error: %s", e)
+        try:
+            await delist_service.stop()
+        except Exception as e:
+            log.warning("  delist-service stop error: %s", e)
+        try:
+            await filter_service.stop()
+        except Exception as e:
+            log.warning("  filter-service stop error: %s", e)
+        try:
+            await rest.aclose()
+        except Exception:
+            pass
         try:
             await close_redis()
         except Exception:
