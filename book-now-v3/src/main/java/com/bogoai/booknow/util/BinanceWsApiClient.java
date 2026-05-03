@@ -72,7 +72,10 @@ public final class BinanceWsApiClient {
     // ── core request/response over a short-lived WS ─────────────────────────
 
     private JsonNode call(String method, Map<String, Object> params) throws Exception {
-        String id = method + "-" + UUID.randomUUID();
+        // Binance requires `id` to match ^[a-zA-Z0-9-_]{1,36}$. A plain UUID
+        // is exactly 36 chars and fits; embedding the method would add a
+        // forbidden '.' and overflow the cap.
+        String id = UUID.randomUUID().toString();
         String payload = MAPPER.writeValueAsString(Map.of(
             "id", id,
             "method", method,

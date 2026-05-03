@@ -54,7 +54,11 @@ async function loadCredentials() {
 // reads one frame, and closes — there's nothing else to multiplex here.
 function wsApiCall(method, params = {}, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
-        const id = `${method}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        // Binance requires `id` to match ^[a-zA-Z0-9-_]{1,36}$. A plain UUID
+        // is 36 chars of [a-f0-9-] and fits exactly. Don't embed the method
+        // (it contains a dot) or unbounded counters.
+        const id = (require('crypto').randomUUID && require('crypto').randomUUID())
+            || (Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14));
         const sock = new WebSocket(WS_API_URL);
         const timer = setTimeout(() => {
             try { sock.terminate(); } catch (_) {}
