@@ -16,7 +16,7 @@ class ConsensusEngine:
     The "Supreme Court" of the trading system.
     Unifies the 7 Original Spring Boot signals with the 9 New Python engines.
     """
-    def __init__(self, interval_sec=5):
+    def __init__(self, interval_sec=2):
         self.redis_client = redis.Redis(host='127.0.0.1', port=6379, decode_responses=True)
         self.interval_sec = interval_sec
         self.symbols = ACTIVE_SYMBOLS  # Monitor all active coins
@@ -43,7 +43,7 @@ class ConsensusEngine:
             final_decision = {
                 "symbol": symbol,
                 "score": round(score, 2),
-                "decision": "BUY" if score >= 75 and not is_blocked else "HOLD",
+                "decision": "BUY" if score >= 65 and not is_blocked else "HOLD",
                 "is_blocked": is_blocked,
                 "block_reason": veto_reason,
                 "signals": details,
@@ -95,10 +95,10 @@ class ConsensusEngine:
         dash_score = inputs['dashboard_score']
 
         weighted_total = (
-            (meta_score * 0.40) +
-            (mtf_score * 0.20) +
-            (obi_score * 0.15) +
-            (sent_score * 0.15) +
+            (meta_score * 0.30) +
+            (mtf_score * 0.25) +
+            (obi_score * 0.25) +
+            (sent_score * 0.10) +
             (dash_score * 0.10)
         )
         

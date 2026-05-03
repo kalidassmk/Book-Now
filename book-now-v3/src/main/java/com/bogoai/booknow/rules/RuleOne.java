@@ -59,8 +59,12 @@ public class RuleOne implements Runnable {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 evaluate();
+                Thread.sleep(500);
+            } catch (InterruptedException ie) {
+                break;
             } catch (Exception e) {
                 log.error("RuleOne error: {}", e.getMessage(), e);
+                try { Thread.sleep(2000); } catch (InterruptedException ie) { break; }
             }
         }
     }

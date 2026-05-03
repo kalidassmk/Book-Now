@@ -41,6 +41,10 @@ const USF_5_7_KEY   = 'ULTRA_SUPER_FAST>5<7'; // Constant.ULTRA_SUPER_FAST_5_7
 const CURRENT_PRICE = 'CURRENT_PRICE';
 const BUY_KEY       = 'BUY';
 const SELL_KEY      = 'SELL';
+const SIGNAL_PREFIX = 'SCALPER:SIGNAL:'; // Matrix data from Python scalper
+const ANALYSIS_020_KEY = 'ANALYSIS_020_TIMELINE'; // Success trend data
+const VIRTUAL_POSITIONS = 'VIRTUAL_POSITIONS:MICRO';
+const VIRTUAL_HISTORY   = 'VIRTUAL_HISTORY:MICRO';
 
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -92,7 +96,27 @@ function handleExecution(event) {
 }
 
 const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT, lazyConnect: true });
+const subRedis = new Redis({ host: REDIS_HOST, port: REDIS_PORT });
+
 redis.on('error', e => console.error('[Server] Redis Error:', e.message));
+subRedis.on('error', e => console.error('[Server] Sub-Redis Error:', e.message));
+
+// Listen for detailed signals from Scalper
+subRedis.subscribe('BINANCE_SIGNALS', (err) => {
+    if (err) console.error('[Server] Failed to subscribe to signals:', err.message);
+});
+
+subRedis.on('message', (channel, message) => {
+    if (channel === 'BINANCE_SIGNALS') {
+        try {
+            const payload = JSON.parse(message);
+            io.emit('scalper-signal', payload);
+        } catch (e) {
+            console.error('[Server] Signal parse error:', e.message);
+        }
+    }
+});
+
 redis.on('connect', async () => {
     console.log('[Server] Redis Connected ✅');
     
@@ -162,6 +186,15 @@ async function checkBinanceOrderStatus(symbol, orderId) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function safeJson(raw) {
     try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+async function getList(key, start = 0, end = -1) {
+    try {
+        const raw = await redis.lrange(key, start, end);
+        return raw.map(item => JSON.parse(item));
+    } catch (e) {
+        return [];
+    }
 }
 
 async function getAllHash(key) {
@@ -273,7 +306,7 @@ async function runAutoTrade(fastCoins, priceHash) {
 
         // ── AUTO BUY ─────────────────────────────────────────────────────────
         if (!positions.has(symbol) && positions.size < autoConfig.maxPositions) {
-            const qty = 10 / price;   // invest $10 per position
+            const qty = 100 / price;   // invest $100 per position
             const target = price * (1 + autoConfig.profitPct / 100);
             const stop = price * (1 - autoConfig.stopLossPct / 100);
 
@@ -345,7 +378,7 @@ async function runAutoTrade(fastCoins, priceHash) {
 async function tick() {
     try {
         // 1. Fast-move sources
-        const [fastMove, lt2min, uf02, uf23, uf03, uf35, sf23, usf57, priceHash, botBuys, botSellsRaw] = await Promise.all([
+        const [fastMove, lt2min, uf02, uf23, uf03, uf35, sf23, usf57, priceHash, botBuys, botSellsRaw, consensusRaw, profitReachedRaw, analysisTimeline, virtualPositions, virtualHistory] = await Promise.all([
             getAllHash(FAST_MOVE_KEY),
             getAllHash(LT2MIN_KEY),
             getAllHash(UF_0_2_KEY),
@@ -357,6 +390,11 @@ async function tick() {
             getAllHash(CURRENT_PRICE),
             getAllHash(BUY_KEY),
             getAllHash(SELL_KEY),
+            getAllHash('FINAL_CONSENSUS_STATE'),
+            getAllHash('PROFIT_REACHED_020'),
+            getAllHash(ANALYSIS_020_KEY),
+            getAllHash(VIRTUAL_POSITIONS),
+            getList(VIRTUAL_HISTORY, 0, 50),
         ]);
 
         // 2. Merge all fast signals into one map
@@ -447,7 +485,7 @@ async function tick() {
                     buyUsdt = myPos.qty * myPos.buyPrice;
                     curUsdt = myPos.qty * price;
                 } else if (botBuy) {
-                    buyUsdt = 12; // Standard bot buy
+                    buyUsdt = 100; // Standard bot buy
                     curUsdt = bp > 0 ? (price / bp * buyUsdt) : 0;
                 }
             }
@@ -459,6 +497,14 @@ async function tick() {
                 const rawNews = await redis.get(`analysis:${coinName}:detailed`);
                 if (rawNews) {
                     newsAnalysis = JSON.parse(rawNews);
+                }
+            } catch(e) {}
+
+            let scalperSignal = null;
+            try {
+                const rawSig = await redis.get(`${SIGNAL_PREFIX}${symbol}`);
+                if (rawSig) {
+                    scalperSignal = JSON.parse(rawSig);
                 }
             } catch(e) {}
 
@@ -477,6 +523,9 @@ async function tick() {
                 profitUsdt: parseFloat(profitUsdt.toFixed(2)),
                 profitInr: parseFloat((profitUsdt * USDT_INR_RATE).toFixed(2)),
                 botSignal: !!botBuys[symbol],
+                scalperSignal: scalperSignal, // Matrix data for "Bot Strategy" column
+                consensus: consensusRaw[symbol] || null, // Final Consensus data (4 layers)
+                profitReached: !!profitReachedRaw[symbol], // Flag for reaching $0.20 profit
                 vol24h: metrics ? metrics.vol24h : 0,
                 heldMs: (isExecuted && myPos) ? (now() - myPos.buyTime) : null,
                 newsAnalysis: newsAnalysis,
@@ -524,7 +573,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 12; // Standard bot buy is $12
+                const buyUsdt = 100; // Standard bot buy is $100
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -593,7 +642,7 @@ async function tick() {
                     ? parseFloat(((sellPrice - buyPrice) / buyPrice * 100).toFixed(3))
                     : null;
                 const pnlUsdt   = (buyPrice > 0 && sellPrice > 0)
-                    ? parseFloat(((sellPrice - buyPrice) / buyPrice * 12).toFixed(4))  // $12 position
+                    ? parseFloat(((sellPrice - buyPrice) / buyPrice * 100).toFixed(4))  // $100 position
                     : 0;
                 const ts        = sell?.timestamp ?? null;
                 return {
@@ -667,7 +716,7 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 12,
+            buyAmount: config.buyAmountUsdt || 100,
             profitPct: config.profitPct || 0,
             profitAmount: config.profitAmountUsdt || 0.20,
             simulation: autoConfig.simulationMode,
@@ -686,8 +735,20 @@ async function tick() {
 
         const behavioralSentiment = await getAdaptiveSentiment();
         const volumeScores = await getVolumeScores();
+        const scalperSignals = await getScalperSignals();
         
-        // [AUDIT] Line 630: Final broadcast packet sent to all connected dashboards
+        const feeIntelRaw = await redis.get('TRADING_FEE_INTELLIGENCE');
+        
+        // Optimization: Create a "Latest Only" summary for the Hub to reduce payload size
+        const latestAnalysis = {};
+        Object.keys(analysisTimeline).forEach(sym => {
+            const history = analysisTimeline[sym];
+            if (Array.isArray(history) && history.length > 0) {
+                latestAnalysis[sym] = history[history.length - 1];
+            }
+        });
+
+        // [AUDIT] Final broadcast packet - optimized
         io.emit('update', { 
             coins: displayed, 
             activePositions: Array.from(positions.values()), 
@@ -700,11 +761,39 @@ async function tick() {
             stats, 
             behavioralSentiment,
             volumeScores,
+            scalperSignals,
+            profitTimeline: profitReachedRaw, 
+            analysisTimeline: latestAnalysis, // Send only latest for most coins
+            fullTimeline: analysisTimeline,   // Keep full for detailed views if needed
+            virtualPositions,
+            virtualHistory,
+            feeStats: feeIntelRaw ? JSON.parse(feeIntelRaw) : null,
             ts: now() 
         });
 
     } catch (e) {
         console.error('[Tick]', e.message);
+    }
+}
+
+async function getScalperSignals() {
+    try {
+        const keys = await redis.keys('BINANCE:SIGNAL:*');
+        if (keys.length === 0) return {};
+        const pipeline = redis.pipeline();
+        keys.forEach(k => pipeline.get(k));
+        const results = await pipeline.exec();
+        const data = {};
+        results.forEach((r, i) => {
+            if (r && r[1]) {
+                const parsed = JSON.parse(r[1]);
+                data[parsed.symbol] = parsed;
+            }
+        });
+        return data;
+    } catch (e) {
+        console.error('[Scalper Signals] Error:', e.message);
+        return {};
     }
 }
 
@@ -754,6 +843,16 @@ setInterval(tick, POLL_MS);
 // Serve Pro Dashboard (Enterprise Terminal)
 app.get('/pro', (req, res) => res.sendFile(path.join(__dirname, 'public', 'pro.html')));
 
+// Profit Analysis Endpoint
+app.get('/api/profit-analysis', async (req, res) => {
+    try {
+        const data = await getAllHash(ANALYSIS_020_KEY);
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch profit analysis' });
+    }
+});
+
 // BTC Price Proxy (via Spring Boot)
 app.get('/api/btc-price', async (req, res) => {
     try {
@@ -801,7 +900,7 @@ app.get('/api/v1/config', async (req, res) => {
         const raw = await redis.get(CONFIG_KEY);
         const config = raw ? JSON.parse(raw) : {
             autoBuyEnabled: false,
-            buyAmountUsdt: 12.0,
+            buyAmountUsdt: 100.0,
             profitPct: 0,
             profitAmountUsdt: 0.20,
             limitBuyOffsetPct: 0.3,

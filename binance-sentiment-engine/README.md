@@ -39,13 +39,14 @@ Ensure **Redis** is running on `127.0.0.1:6379`.
 Before starting the engines, fetch the latest top-volume coins from Binance:
 ```bash
 cd binance-sentiment-engine
+
 /Users/bogoai/Book-Now/venv313/bin/python3 sync_symbols.py
 ```
 
 ### 3. Start the Python Intelligence Stack
 Launch all 10 specialized engines (Regime, OBI, Volume, Meta-Model, etc.):
 ```bash
-cd binance-sentiment-engine
+cd /Users/bogoai/Book-Now/binance-sentiment-engine
 /Users/bogoai/Book-Now/venv313/bin/python3 start_all.py
 ```
 
@@ -86,10 +87,14 @@ These scripts are used for broad market discovery and deep analysis. You can run
 
 | Script | Command | Purpose |
 | :--- | :--- | :--- |
-| **Utility Master** | `cd binance-sentiment-engine && ../venv313/bin/python3 start_utilities.py` | **One-Stop Hub**: Runs Sync, Scanner, and Fast-Move Scan in a smart loop. |
+| **Utility Master** | `cd /Users/bogoai/Book-Now/binance-sentiment-engine
+ && /Users/bogoai/Book-Now/venv313/bin/python3 start_utilities.py` | **One-Stop Hub**: Runs Sync, Scanner, and Fast-Move Scan in a smart loop. |
 | **Market Scanner** | `cd binance-sentiment-engine && ../venv313/bin/python3 market_sentiment_engine.py` | Scans **ALL USDT pairs** to find best setups. |
 | **Deep Analyzer** | `cd binance-sentiment-engine && ../venv313/bin/python3 volume_price_analyzer.py --symbol BTC/USDT` | Deep-dive 12-timeframe analysis for one coin. |
 | **Fast Move Scan** | `cd binance-sentiment-engine && ../venv313/bin/python3 volume_price_analyzer.py --scan` | Scans current trending coins in Redis. |
+| **Pattern Recorder** | `cd binance-sentiment-engine && ../venv313/bin/python3 success_pattern_recorder.py` | **Success DNA**: Stores winning patterns in AnalyseDB. |
+| **Pattern Matcher** | `cd binance-sentiment-engine && ../venv313/bin/python3 pattern_matching_engine.py` | **Smart Hunter**: Finds coins mimicking past success patterns. |
+| **Profit Trend** | `cd binance-sentiment-engine && ../venv313/bin/python3 profit_020_trend_analyzer.py` | **Growth Tracker**: Analyzes volume/price trends for successful coins. |
 | **Symbol Sync** | `cd binance-sentiment-engine && ../venv313/bin/python3 sync_symbols.py` | **Live Binance API Sync**: Fetches Top 200 coins and updates Redis. |
 
 ### 🛠️ Utility Master (`start_utilities.py`)
@@ -97,9 +102,16 @@ One script to rule them all. Manages:
 - `sync_symbols.py`: Keeps your Top USDT list fresh.
 - `market_sentiment_engine.py`: Continuous behavioral analysis.
 - `volume_price_analyzer.py --scan`: Periodically finds momentum breakouts.
+- `ultra_fast_scalper.py`: Rapid multi-symbol scalping.
+- `profit_reached_analyzer.py`: High-frequency profit milestone tracking.
+- `profit_020_trend_analyzer.py`: Tracks and visualizes post-success volume and price trends.
+- `success_pattern_recorder.py`: Records successful trade "DNA" into AnalyseDB.
+- `pattern_matching_engine.py`: Scans live market for historical success repeats.
+- `fee_calculator_util.py`: (Startup Only) Calculates net profit targets after 0.1% fees.
+- `virtual_scalp_executor.py`: Manages paper trades with 3m patience logic and net PnL reporting.
 
 ```bash
-python3 start_utilities.py
+/Users/bogoai/Book-Now/venv313/bin/python3 start_utilities.py
 ```
 
 ---
@@ -115,3 +127,4 @@ redis-cli hget FINAL_CONSENSUS_STATE SOLUSDT
 - **Risk Limits**: Adjusted in `risk_management_engine/config.json`.
 - **Dynamic Symbols**: The system is fully dynamic. Run `/Users/bogoai/Book-Now/venv313/bin/python3 sync_symbols.py` to automatically update the Top 200 coins across all engines from the Binance API.
 - **Manual Symbols**: Edit `symbols_config.py` only if you want to override the dynamic discovery with a hardcoded list.
+- **Success Radar**: Access the new `.20 Profit Analysis` dashboard at `http://localhost:3000/profit_analysis.html` or via the "Success Radar" link in the Pro Terminal sidebar.

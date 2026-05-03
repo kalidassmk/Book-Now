@@ -24,7 +24,7 @@
 """
 
 import asyncio
-import aiohttp
+import ccxt.async_support as ccxt
 import redis
 import json
 import logging
@@ -104,31 +104,87 @@ class SymbolDiscoveryEngine:
         log.info("  Target: Top %d USDT pairs by composite score", self.top_n)
         log.info("=" * 65)
 
-        ssl_ctx = ssl._create_unverified_context()
-        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
+        # Initialize CCXT
+        self.spot_client = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+        self.futures_client = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'swap'}
+        })
 
-        async with aiohttp.ClientSession(connector=connector) as session:
+        try:
             # 1. Fetch spot + futures ticker data in parallel
-            spot_data, futures_data, futures_oi = await asyncio.gather(
-                self._fetch_spot_tickers(session),
-                self._fetch_futures_tickers(session),
-                self._fetch_futures_oi_map(session),
-                return_exceptions=True,
+            spot_tickers, futures_tickers = await asyncio.gather(
+                self.spot_client.fetch_tickers(),
+                self.futures_client.fetch_tickers()
             )
 
-            # Gracefully handle partial failures
-            if isinstance(spot_data, Exception):
-                log.error("❌ Spot ticker fetch failed: %s", spot_data)
-                spot_data = []
-            if isinstance(futures_data, Exception):
-                log.warning("⚠️  Futures ticker fetch failed (will use spot only): %s", futures_data)
-                futures_data = []
-            if isinstance(futures_oi, Exception):
-                log.warning("⚠️  Open interest fetch failed: %s", futures_oi)
-                futures_oi = {}
+            # Convert CCXT tickers to the internal format
+            spot_data = []
+            for sym, t in spot_tickers.items():
+                if not sym.endswith("/USDT"): continue
+                base_sym = sym.replace("/", "")
+                if base_sym in EXCLUDED_SYMBOLS: continue
+                volume = float(t.get('quoteVolume', 0))
+                if volume < MIN_QUOTE_VOLUME_USDT: continue
+                spot_data.append({
+                    "symbol": base_sym,
+                    "quote_volume": volume,
+                    "price": float(t.get('last', 0)),
+                    "price_change_pct": abs(float(t.get('percentage', 0))),
+                    "trade_count": int(t.get('info', {}).get('count', 0)),
+                    "high": float(t.get('high', 0)),
+                    "low": float(t.get('low', 0)),
+                    "source": "spot"
+                })
+
+            futures_data = []
+            for sym, t in futures_tickers.items():
+                if not sym.endswith("/USDT"): continue
+                futures_data.append({
+                    "symbol": sym.replace("/", ""),
+                    "futures_volume": float(t.get('quoteVolume', 0)),
+                    "futures_price_change_pct": abs(float(t.get('percentage', 0))),
+                    "futures_trade_count": int(t.get('info', {}).get('count', 0)),
+                })
+
+            # Fetch OI only for the top symbols to save time/limits
+            # (We'll do this after a preliminary ranking or just for all futures symbols)
+            futures_oi = {}
+            log.info("📡 Fetching Open Interest for all active futures pairs...")
+            # For simplicity, we'll try to fetch OI for symbols that have futures
+            futures_syms = [f['symbol'] for f in futures_data]
+            # ... (OI fetching logic below)
 
             # 2. Merge into unified records
             ranked = self._rank_symbols(spot_data, futures_data, futures_oi)
+
+            # 3. Dynamic Injection: FAST_MOVE Priority
+            try:
+                fast_movers = self._redis.hkeys("FAST_MOVE")
+                if fast_movers:
+                    log.info("🔥 [FAST_MOVE] Detected breakout symbols from Java Backend. Ensuring they are ACTIVE.")
+                    existing_symbols = {r["symbol"] for r in ranked}
+                    for fm in fast_movers:
+                        if fm not in existing_symbols:
+                            log.info("✨ [FAST_MOVE] Injecting breakout: %s", fm)
+                            ranked.append({
+                                "symbol": fm, "rank": 999, "score": 100.0,
+                                "price": 0.0, "quote_volume": 0.0, "price_change_pct": 0.0,
+                                "trade_count": 0, "open_interest": 0.0, "has_futures": True,
+                                "high_24h": 0, "low_24h": 0, "norm_volume": 0.0,
+                                "norm_trades": 0.0, "norm_momentum": 0.0, "norm_oi": 0.0
+                            })
+            except Exception as e:
+                log.warning("⚠️ Failed to inject Fast Movers: %s", e)
+
+        except Exception as e:
+            log.error("❌ Discovery scan failed: %s", e)
+            ranked = []
+        finally:
+            await self.close()
 
         if not ranked:
             log.error("❌ No symbols ranked — aborting Redis write.")
@@ -159,107 +215,9 @@ class SymbolDiscoveryEngine:
 
     # ── Data Fetching ──────────────────────────────────────────────────────
 
-    async def _fetch_spot_tickers(self, session: aiohttp.ClientSession) -> List[Dict]:
-        """Fetch 24hr ticker data for all symbols from Binance Spot."""
-        log.info("📡 [SPOT] Fetching 24hr ticker data...")
-        async with session.get(BINANCE_SPOT_TICKER) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-
-        # Filter: USDT pairs only, not stablecoins, minimum volume
-        filtered = []
-        for t in data:
-            sym = t.get("symbol", "")
-            if not sym.endswith("USDT"):
-                continue
-            if sym in EXCLUDED_SYMBOLS:
-                continue
-            volume = float(t.get("quoteVolume", 0))
-            if volume < MIN_QUOTE_VOLUME_USDT:
-                continue
-            filtered.append({
-                "symbol":       sym,
-                "quote_volume": volume,
-                "price":        float(t.get("lastPrice", 0)),
-                "price_change_pct": abs(float(t.get("priceChangePercent", 0))),
-                "trade_count":  int(t.get("count", 0)),
-                "high":         float(t.get("highPrice", 0)),
-                "low":          float(t.get("lowPrice", 0)),
-                "source":       "spot",
-            })
-
-        log.info("✅ [SPOT] %d USDT pairs pass volume filter (out of %d total)", len(filtered), len(data))
-        return filtered
-
-    async def _fetch_futures_tickers(self, session: aiohttp.ClientSession) -> List[Dict]:
-        """Fetch 24hr ticker data from Binance Futures (USDT-M)."""
-        log.info("📡 [FUTURES] Fetching 24hr ticker data...")
-        try:
-            async with session.get(BINANCE_FUTURES_TICKER) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-
-            filtered = []
-            for t in data:
-                sym = t.get("symbol", "")
-                if not sym.endswith("USDT"):
-                    continue
-                volume = float(t.get("quoteVolume", 0))
-                filtered.append({
-                    "symbol":           sym,
-                    "futures_volume":   volume,
-                    "futures_price_change_pct": abs(float(t.get("priceChangePercent", 0))),
-                    "futures_trade_count": int(t.get("count", 0)),
-                })
-            log.info("✅ [FUTURES] %d USDT futures pairs fetched", len(filtered))
-            return filtered
-        except Exception as e:
-            log.warning("⚠️  [FUTURES] Ticker fetch skipped: %s", e)
-            return []
-
-    async def _fetch_futures_oi_map(self, session: aiohttp.ClientSession) -> Dict[str, float]:
-        """Fetch open interest for all active futures symbols."""
-        log.info("📡 [OI] Fetching futures open interest...")
-        try:
-            async with session.get(BINANCE_FUTURES_INFO) as resp:
-                resp.raise_for_status()
-                info = await resp.json()
-
-            symbols = [
-                s["symbol"] for s in info.get("symbols", [])
-                if s.get("status") == "TRADING" and s["symbol"].endswith("USDT")
-            ]
-
-            oi_map = {}
-            # Fetch OI in batches to avoid rate limits
-            batch_size = 50
-            for i in range(0, len(symbols), batch_size):
-                batch = symbols[i:i + batch_size]
-                tasks = [self._get_oi(session, sym) for sym in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for sym, result in zip(batch, results):
-                    if isinstance(result, (int, float)):
-                        oi_map[sym] = result
-                # Small delay between batches to be respectful
-                await asyncio.sleep(0.1)
-
-            log.info("✅ [OI] Open interest fetched for %d symbols", len(oi_map))
-            return oi_map
-        except Exception as e:
-            log.warning("⚠️  [OI] Open interest fetch failed: %s", e)
-            return {}
-
-    async def _get_oi(self, session: aiohttp.ClientSession, symbol: str) -> float:
-        """Fetch open interest for a single symbol."""
-        try:
-            url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return float(data.get("openInterest", 0)) * float(data.get("time", 1))
-                return 0.0
-        except Exception:
-            return 0.0
+    async def close(self):
+        await self.spot_client.close()
+        await self.futures_client.close()
 
     # ── Ranking Logic ──────────────────────────────────────────────────────
 

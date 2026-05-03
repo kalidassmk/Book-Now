@@ -12,11 +12,25 @@ import json
 import time
 import asyncio
 import logging
-import requests
 import ssl
-import urllib3
 import websockets
 import redis
+import ccxt
+import os
+import requests
+import urllib3
+
+def manual_load_dotenv(path):
+    if not os.path.exists(path): return
+    with open(path, 'r') as f:
+        for line in f:
+            if '=' in line and not line.startswith('#'):
+                k, v = line.strip().split('=', 1)
+                os.environ[k] = v.strip('"').strip("'")
+
+# Load keys from the shared dashboard .env
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", ".env")
+manual_load_dotenv(dotenv_path)
 
 # Internal Imports
 from indicators import IndicatorEngine, OHLCV
@@ -54,10 +68,10 @@ class RegimeTraderEngine:
     def __init__(
         self,
         symbol: str = "BTCUSDT",
-        interval: str = "5m",
-        indicator_period: int = 14,
-        api_key: str = "",
-        api_secret: str = "",
+        interval: str = "1m",
+        indicator_period: int = 9,
+        api_key: str = None,
+        api_secret: str = None,
         live_trading: bool = False,
         trade_amount_usdt: float = 12.0,
         redis_host: str = "127.0.0.1",
@@ -69,9 +83,17 @@ class RegimeTraderEngine:
         # Components
         self.indicators = IndicatorEngine(period=indicator_period)
         self.regime_detector = RegimeDetector()
+        # Initialize CCXT
+        self.ccxt_client = ccxt.binance({
+            'apiKey': api_key or os.getenv("BINANCE_API_KEY"),
+            'secret': api_secret or os.getenv("BINANCE_SECRET_KEY"),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
+
         self.executor = BinanceExecutor(
-            api_key=api_key,
-            api_secret=api_secret,
+            api_key=self.ccxt_client.apiKey,
+            api_secret=self.ccxt_client.secret,
             live=live_trading,
             trade_amount_usdt=trade_amount_usdt,
         )
@@ -131,21 +153,13 @@ class RegimeTraderEngine:
     # ── History Seeding ───────────────────────────────────────────────
 
     def _seed_history(self):
-        """Fetch historical klines from REST API to seed indicators."""
         try:
-            url = f"{BINANCE_REST}/api/v3/klines"
-            params = {
-                "symbol": self.symbol,
-                "interval": self.interval,
-                "limit": 200,
-            }
+            log.info("📡 Fetching historical candles for %s using CCXT...", self.symbol)
 
-            log.info("📡 Fetching %d historical %s candles for %s...",
-                     params["limit"], self.interval, self.symbol)
-
-            resp = requests.get(url, params=params, timeout=15, verify=False)
-            resp.raise_for_status()
-            klines = resp.json()
+            # CCXT expects symbol with slash
+            ccxt_symbol = self.symbol if "/" in self.symbol else f"{self.symbol[:-4]}/{self.symbol[-4:]}"
+            
+            klines = self.ccxt_client.fetch_ohlcv(ccxt_symbol, timeframe=self.interval, limit=200)
 
             for k in klines:
                 candle = OHLCV(

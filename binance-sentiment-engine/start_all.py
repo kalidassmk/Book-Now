@@ -27,6 +27,9 @@ ALGORITHMS = [
     ("Risk Management Engine", "risk_management_engine", "main.py"),
     ("BTC Correlation Filter", "btc_correlation_filter", "main.py"),
     ("Consensus Engine", ".", "consensus_engine.py"),
+    ("Profit Reached Analyzer", ".", "profit_reached_analyzer.py"),
+    ("Success Pattern Recorder", ".", "success_pattern_recorder.py"),
+    ("Profit 0.20 Trend Analyzer", ".", "profit_020_trend_analyzer.py"),
 ]
 
 REDIS_KEYS_TO_CLEAR = [

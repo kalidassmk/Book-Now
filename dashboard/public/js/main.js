@@ -75,7 +75,7 @@ socket.on('update', (data) => {
     // Delegate rendering to each module
     const coins = data.coins || [];
     const sortedCoins = window.scannerSort ? window.scannerSort.sortCoins([...coins]) : coins;
-    renderScanner(sortedCoins);
+    renderScanner(sortedCoins, data.scalperSignals || {});
     
     // Deduplicate by symbol to prevent double-showing Manual + Bot entries
     const merged = new Map();

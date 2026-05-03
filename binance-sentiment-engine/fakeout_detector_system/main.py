@@ -31,15 +31,16 @@ class FakeoutBot:
         self.redis_client = redis.Redis(host='127.0.0.1', port=6379, decode_responses=True)
 
     async def run(self):
-        log.info(f"🕵️ [INITIALIZING] Fakeout Detector for {self.symbols}")
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            fetcher = DataFetcher(session)
+        log.info(f"🕵️ [INITIALIZING] Fakeout Detector (Resilient CCXT Mode) for {self.symbols}")
+        fetcher = DataFetcher()
+        try:
             while True:
                 tasks = [self.process_symbol(fetcher, symbol) for symbol in self.symbols]
                 await asyncio.gather(*tasks)
                 log.info(f"Cycle complete. Waiting {self.interval_sec}s...")
                 await asyncio.sleep(self.interval_sec)
+        finally:
+            await fetcher.close()
 
     async def process_symbol(self, fetcher, symbol):
         try:
@@ -47,10 +48,7 @@ class FakeoutBot:
             klines = await fetcher.fetch_klines(symbol)
             if not klines: return
 
-            df = pd.DataFrame(klines, columns=[
-                'time', 'open', 'high', 'low', 'close', 'volume', 
-                'close_time', 'q_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore'
-            ])
+            df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
             df['close'] = df['close'].astype(float)
             df['high'] = df['high'].astype(float)
             df['low'] = df['low'].astype(float)

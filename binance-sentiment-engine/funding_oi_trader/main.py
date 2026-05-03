@@ -29,15 +29,16 @@ class FundingOIBot:
         self.redis_client = redis.Redis(host='127.0.0.1', port=6379, decode_responses=True)
 
     async def run(self):
-        log.info(f"🚀 Starting Funding/OI Bot for symbols: {self.symbols}")
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            fetcher = DataFetcher(session)
+        log.info(f"🚀 Starting Funding/OI Bot (Resilient CCXT Mode) for symbols: {self.symbols}")
+        fetcher = DataFetcher()
+        try:
             while True:
                 tasks = [self.process_symbol(fetcher, symbol) for symbol in self.symbols]
                 await asyncio.gather(*tasks)
-                log.info(f"Sleeping for {self.interval_sec}s...")
+                log.info(f"Cycle complete. Waiting {self.interval_sec}s...")
                 await asyncio.sleep(self.interval_sec)
+        finally:
+            await fetcher.close()
 
     async def process_symbol(self, fetcher, symbol):
         try:
@@ -52,10 +53,29 @@ class FundingOIBot:
                 log.error(f"Missing data for {symbol}")
                 return
 
+            # Adapt CCXT data to IndicatorCalculator (which expects Binance REST format)
+            # 1. Klines: CCXT returns 6 columns, Indicators expect 12
+            # We only need 'close' for trend calculation
+            adapted_klines = []
+            for k in klines:
+                # CCXT: [ts, o, h, l, c, v]
+                # Pad to 12 columns to satisfy IndicatorCalculator DataFrame creation
+                adapted_klines.append([k[0], k[1], k[2], k[3], k[4], k[5], 0, 0, 0, 0, 0, 0])
+
+            # 2. OI Hist: CCXT 'openInterest' -> REST 'sumOpenInterest'
+            adapted_oi = []
+            for o in oi_hist:
+                adapted_oi.append({'sumOpenInterest': o.get('openInterest', o.get('sumOpenInterest', 0))})
+
+            # 3. Funding: CCXT 'fundingRate'
+            # fetch_funding_rate_history returns a list, we take the last one
+            latest_funding = funding_data[-1] if isinstance(funding_data, list) else funding_data
+            rate = latest_funding.get('fundingRate', latest_funding.get('rate', 0))
+
             # 2. Compute Metrics
-            price, trend, trend_strength = IndicatorCalculator.calculate_price_trend(klines)
-            oi, oi_change = IndicatorCalculator.calculate_oi_change(oi_hist)
-            funding_status, funding_rate = IndicatorCalculator.normalize_funding(funding_data[0]['fundingRate'])
+            price, trend, trend_strength = IndicatorCalculator.calculate_price_trend(adapted_klines)
+            oi, oi_change = IndicatorCalculator.calculate_oi_change(adapted_oi)
+            funding_status, funding_rate = IndicatorCalculator.normalize_funding(rate)
 
             # 3. Evaluate Strategy
             signal_data = self.strategy.evaluate(

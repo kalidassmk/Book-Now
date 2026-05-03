@@ -14,10 +14,15 @@ class TrendIndicator:
         if not klines or len(klines) < 30:
             return 0, "insufficient data"
 
-        df = pd.DataFrame(klines, columns=[
-            'time', 'open', 'high', 'low', 'close', 'volume', 
-            'close_time', 'q_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore'
-        ])
+        # Prepare DataFrame
+        num_cols = len(klines[0])
+        if num_cols >= 12:
+            cols = ['time', 'open', 'high', 'low', 'close', 'volume', 
+                    'close_time', 'q_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore']
+        else:
+            cols = ['time', 'open', 'high', 'low', 'close', 'volume']
+            
+        df = pd.DataFrame(klines, columns=cols[:num_cols])
         df['close'] = df['close'].astype(float)
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)

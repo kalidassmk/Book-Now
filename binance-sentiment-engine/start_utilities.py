@@ -17,7 +17,12 @@ import threading
 from queue import Queue, Empty
 from datetime import datetime
 
-# ─── CONFIGURATION ───────────────────────────────────────────────────────────
+# ─── SETUP TASKS (Run once at startup) ───────────────────────────────────────
+SETUP_TASKS = [
+    ("Fee Intelligence", ".", "fee_calculator_util.py"),
+]
+
+# ─── CONFIGURATION (Long running or looping) ──────────────────────────────────
 # Format: (name, folder, script_with_args, interval_seconds_if_loop)
 # interval = 0 means the script is persistent (has its own loop)
 UTILITIES = [
@@ -25,6 +30,11 @@ UTILITIES = [
     ("Market Scanner",     ".", "market_sentiment_engine.py",           0),    # Persistent
     ("Fast Move Analyzer", ".", "volume_price_analyzer.py --scan",      600),  # Every 10m
     ("Fast Scalper",       ".", "ultra_fast_scalper.py",                0),    # Persistent
+    ("Profit Analyzer",     ".", "profit_reached_analyzer.py",           0),    # Persistent
+    ("Pattern Recorder",    ".", "success_pattern_recorder.py",          0),    # Persistent
+    ("Pattern Matcher",     ".", "pattern_matching_engine.py",           0),    # Persistent
+    ("Profit Trend",        ".", "profit_020_trend_analyzer.py",         0),    # Persistent
+    ("Virtual Scalper",     ".", "virtual_scalp_executor.py",            0),    # Persistent
 ]
 
 PYTHON_PATH = os.path.abspath("../venv313/bin/python3")
@@ -66,6 +76,15 @@ def main():
     print("\033[94m🚀 Starting Utility & Scanning Master Stack...\033[0m")
     print("-" * 65)
 
+    # --- Run Setup Tasks First ---
+    for name, folder, cmd in SETUP_TASKS:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] 🛠️ [SETUP] {name:20} -> {cmd}")
+        cwd = os.path.join(os.getcwd(), folder)
+        full_cmd = [PYTHON_PATH] + cmd.split()
+        subprocess.run(full_cmd, cwd=cwd)
+    print("-" * 65)
+
     try:
         while True:
             now = time.time()
@@ -103,9 +122,13 @@ def main():
             try:
                 while True:
                     name, line = q.get_nowait()
-                    # Filter for meaningful logs (errors or completions)
+                    # Filter for meaningful logs (errors, connections, or trading activity)
                     line_up = line.upper()
-                    if any(kw in line_up for kw in ["ERROR", "✅", "✨", "🧠", "🎯", "SCAN COMPLETE", "SYNC COMPLETE"]):
+                    if any(kw in line_up for kw in [
+                        "ERROR", "EXCEPTION", "❌", "✅", "✨", "🚀", "🔗", "📊", "🛒", "⚡", "💰", "🛡️",
+                        "INITIALIZING", "INITIALIZED", "CONNECTED", "SCAN COMPLETE", "SYNC COMPLETE",
+                        "BUYING", "SELLING", "PROFIT", "LOSS", "EXIT", "TREND", "REVERSAL"
+                    ]):
                         print(f"[\033[95m{name}\033[0m] {line.strip()}")
             except Empty:
                 pass

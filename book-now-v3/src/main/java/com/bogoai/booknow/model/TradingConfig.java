@@ -32,7 +32,7 @@ public class TradingConfig implements Serializable {
     public TradingConfig() {
         // Default safe values
         this.autoBuyEnabled = false;
-        this.buyAmountUsdt = 12.0;
+        this.buyAmountUsdt = 100.0;
         this.profitPct = 0; // Set to 0 to prioritize profitAmountUsdt
         this.profitAmountUsdt = 0.20;
         this.limitBuyOffsetPct = 0.3;

@@ -11,8 +11,11 @@ class CorrelationEngine:
             return 0.0
 
         # Convert to DataFrames
-        target_df = pd.DataFrame(target_klines, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qv', 'tr', 'tbv', 'tbq', 'i'])
-        btc_df = pd.DataFrame(btc_klines, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qv', 'tr', 'tbv', 'tbq', 'i'])
+        num_cols_t = len(target_klines[0])
+        num_cols_b = len(btc_klines[0])
+        
+        target_df = pd.DataFrame(target_klines, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qv', 'tr', 'tbv', 'tbq', 'i'][:num_cols_t])
+        btc_df = pd.DataFrame(btc_klines, columns=['t', 'o', 'h', 'l', 'c', 'v', 'ct', 'qv', 'tr', 'tbv', 'tbq', 'i'][:num_cols_b])
 
         # Align on timestamp 't'
         target_df['t'] = pd.to_numeric(target_df['t'])
@@ -34,6 +37,9 @@ class CorrelationEngine:
         # Rolling Correlation
         rolling_corr = merged['ret_alt'].rolling(window=window).corr(merged['ret_btc'])
         
+        if rolling_corr.empty or len(rolling_corr) < 1:
+            return 0.0
+            
         current_corr = rolling_corr.iloc[-1]
         
         return 0.0 if np.isnan(current_corr) else round(current_corr, 4)

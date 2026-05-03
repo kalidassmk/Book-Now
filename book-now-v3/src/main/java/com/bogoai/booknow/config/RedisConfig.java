@@ -42,7 +42,25 @@ public class RedisConfig {
         RedisStandaloneConfiguration redisConfig = new RedisStandaloneConfiguration();
         redisConfig.setHostName(host);
         redisConfig.setPort(port);
-        return new JedisConnectionFactory(redisConfig);
+
+        // --- Optimized Pool Configuration ---
+        redis.clients.jedis.JedisPoolConfig poolConfig = new redis.clients.jedis.JedisPoolConfig();
+        poolConfig.setMaxTotal(50);          // Increase total connections for 8 workers + processors
+        poolConfig.setMaxIdle(20);
+        poolConfig.setMinIdle(5);
+        poolConfig.setTestOnBorrow(true);
+        poolConfig.setBlockWhenExhausted(true);
+        poolConfig.setMaxWaitMillis(5000);   // Wait up to 5s for a connection
+
+        org.springframework.data.redis.connection.jedis.JedisClientConfiguration clientConfig = 
+            org.springframework.data.redis.connection.jedis.JedisClientConfiguration.builder()
+                .usePooling().poolConfig(poolConfig)
+                .and()
+                .readTimeout(java.time.Duration.ofMillis(10000))    // Increase read timeout to 10s
+                .connectTimeout(java.time.Duration.ofMillis(5000)) // Increase connect timeout to 5s
+                .build();
+
+        return new JedisConnectionFactory(redisConfig, clientConfig);
     }
 
     @Bean(name = "redisTemplateShortestTime")

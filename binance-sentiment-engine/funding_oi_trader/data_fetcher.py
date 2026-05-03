@@ -1,4 +1,4 @@
-import aiohttp
+import ccxt.async_support as ccxt
 import asyncio
 import logging
 import time
@@ -7,34 +7,49 @@ log = logging.getLogger("funding_oi.fetcher")
 
 class DataFetcher:
     """
-    Fetches market data from Binance Futures API (fapi).
+    Fetches market data from Binance Futures using CCXT.
     """
-    BASE_URL = "https://fapi.binance.com"
-
-    def __init__(self, session: aiohttp.ClientSession):
-        self.session = session
+    def __init__(self, apiKey=None, secret=None):
+        self.client = ccxt.binance({
+            'apiKey': apiKey,
+            'secret': secret,
+            'enableRateLimit': True,
+            'options': {'defaultType': 'swap'} # Perpetuals
+        })
 
     async def fetch_klines(self, symbol, interval="5m", limit=100):
-        url = f"{self.BASE_URL}/fapi/v1/klines"
-        params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
-        async with self.session.get(url, params=params) as resp:
-            return await resp.json()
+        try:
+            ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
+            return await self.client.fetch_ohlcv(ccxt_symbol, timeframe=interval, limit=limit)
+        except Exception as e:
+            log.error(f"Error fetching klines for {symbol}: {e}")
+            return None
 
-    async def fetch_funding_rate(self, symbol, limit=24):
-        url = f"{self.BASE_URL}/fapi/v1/fundingRate"
-        params = {"symbol": symbol.upper(), "limit": limit}
-        async with self.session.get(url, params=params) as resp:
-            return await resp.json()
+    async def fetch_funding_rate(self, symbol, limit=1):
+        try:
+            ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
+            # CCXT fetch_funding_rate returns recent funding rate
+            rates = await self.client.fetch_funding_rate_history(ccxt_symbol, limit=limit)
+            return rates
+        except Exception as e:
+            log.error(f"Error fetching funding rate for {symbol}: {e}")
+            return None
 
     async def fetch_open_interest(self, symbol):
-        url = f"{self.BASE_URL}/fapi/v1/openInterest"
-        params = {"symbol": symbol.upper()}
-        async with self.session.get(url, params=params) as resp:
-            return await resp.json()
+        try:
+            ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
+            return await self.client.fetch_open_interest(ccxt_symbol)
+        except Exception as e:
+            log.error(f"Error fetching OI for {symbol}: {e}")
+            return None
 
     async def fetch_open_interest_hist(self, symbol, interval="5m", limit=30):
-        # Note: Open interest history has a different endpoint
-        url = f"{self.BASE_URL}/futures/data/openInterestHist"
-        params = {"symbol": symbol.upper(), "period": interval, "limit": limit}
-        async with self.session.get(url, params=params) as resp:
-            return await resp.json()
+        try:
+            ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
+            return await self.client.fetch_open_interest_history(ccxt_symbol, timeframe=interval, limit=limit)
+        except Exception as e:
+            log.error(f"Error fetching OI history for {symbol}: {e}")
+            return None
+
+    async def close(self):
+        await self.client.close()

@@ -42,8 +42,9 @@ const manualPriceMap = new Map();
  * Called every time a WebSocket 'update' event arrives.
  *
  * @param {Array<object>} coins  Coin objects from server
+ * @param {object} signals Signal matrix data from server
  */
-function renderScanner(coins) {
+function renderScanner(coins, signals = {}) {
     const tbody = document.getElementById('scanner-body');
     const isLimit = (typeof orders !== 'undefined' && orders.getMode() === 'LIMIT');
     const displayStyle = isLimit ? 'table-cell' : 'none';
@@ -83,11 +84,16 @@ function renderScanner(coins) {
         const recClass = REC_CLASSES[c.recommendation] || '';
 
         row.className = c.hasPosition ? 'has-pos' : '';
+        const signalData = signals[c.symbol] || null;
         
         if (!row.innerHTML) {
             row.innerHTML = _buildRowTemplate(c, sigClass, pnlClass, pnlStr, scoreStr, recClass, displayStyle);
         } else {
             // Update live data
+            const matrixCell = row.querySelector('.td-matrix');
+            if (matrixCell) {
+                matrixCell.innerHTML = _buildMatrixHtml(c);
+            }
             const volCell = row.querySelector('.vol-live');
             if (volCell) volCell.textContent = window.utils.fmtVol(c.vol24h);
 
@@ -116,10 +122,50 @@ function renderScanner(coins) {
     });
 }
 
+function _buildMatrixHtml(c) {
+    const scalperSignal = c.scalperSignal;
+    const consensus = c.consensus;
+
+    // 1. Prefer Consensus Signals (4 Layers: ML, Trend, Book, Sentiment)
+    if (consensus && consensus.signals) {
+        const s = consensus.signals;
+        return `
+            <div class="matrix-grid" style="grid-template-columns: repeat(2, 1fr); width: 40px;" title="Consensus Strategy (ML, Trend, Book, Sentiment)">
+                <div class="m-item ${s.ml_layer >= 75 ? 'pass' : 'fail'}" title="ML Intelligence: ${s.ml_layer}%">🧠</div>
+                <div class="m-item ${s.trend_layer >= 75 ? 'pass' : 'fail'}" title="Trend Alignment: ${s.trend_layer}%">📈</div>
+                <div class="m-item ${s.book_layer >= 75 ? 'pass' : 'fail'}" title="Order Book Imbalance: ${s.book_layer}%">⚖️</div>
+                <div class="m-item ${s.sentiment_layer >= 75 ? 'pass' : 'fail'}" title="Behavioral Sentiment: ${s.sentiment_layer}%">👥</div>
+            </div>
+        `;
+    }
+
+    // 2. Fallback to Scalper Matrix (6 Indicators)
+    if (scalperSignal && scalperSignal.matrix) {
+        const m = scalperSignal.matrix;
+        return `
+            <div class="matrix-grid" title="Scalper Strategy (Live Indicators)">
+                <div class="m-item ${m.btc_trend ? 'pass' : 'fail'}" title="BTC Trend">₿</div>
+                <div class="m-item ${m.stacked_trend ? 'pass' : 'fail'}" title="EMA Trend">📈</div>
+                <div class="m-item ${m.pullback ? 'pass' : 'fail'}" title="Pullback">🔙</div>
+                <div class="m-item ${m.rsi_filter ? 'pass' : 'fail'}" title="RSI">⚡</div>
+                <div class="m-item ${m.volume_spike ? 'pass' : 'fail'}" title="Volume">📊</div>
+                <div class="m-item ${m.green_candle ? 'pass' : 'fail'}" title="Candle">🕯️</div>
+            </div>
+        `;
+    }
+
+    return `<div class="matrix-grid-placeholder">—</div>`;
+}
+
 function _buildRowTemplate(c, sigClass, pnlClass, pnlStr, scoreStr, recClass, displayStyle) {
     const isLimit = (typeof orders !== 'undefined' && orders.getMode() === 'LIMIT');
+    const matrixHtml = _buildMatrixHtml(c);
+
     return `
-      <td><span class="sym">${c.symbol}</span></td>
+      <td>
+        <span class="sym">${c.symbol}</span>
+        ${c.profitReached ? `<span class="rec-badge rec-buy" title="Profit Target Reached ($0.20)" style="margin-left: 4px; padding: 1px 4px; font-size: 8px;">🎯 $0.20</span>` : ''}
+      </td>
       <td><span class="signal-tag ${sigClass}">${c.signal}</span></td>
       <td>
         <div class="analysis-cell">
@@ -128,6 +174,7 @@ function _buildRowTemplate(c, sigClass, pnlClass, pnlStr, scoreStr, recClass, di
           ${c.newsAnalysis ? `<span class="rec-badge ${c.newsAnalysis.decision === 'BUY' ? 'rec-buy' : c.newsAnalysis.decision === 'SELL' ? 'rec-dont-buy' : 'rec-neutral'}" title="News Sentiment Score: ${Number(c.newsAnalysis.score || c.newsAnalysis.final_score || 0).toFixed(2)}" style="margin-left: 4px;">📰 ${c.newsAnalysis.decision || 'HOLD'}</span>` : ''}
         </div>
       </td>
+      <td class="td-matrix">${matrixHtml}</td>
       <td class="price vol-live">${window.utils.fmtVol(c.vol24h)}</td>
       <td class="price price-live">${fmt(c.currentPrice)}</td>
       <td class="price buy-at" style="color:var(--blue)">${c.buyPrice ? fmt(c.buyPrice) : '—'}</td>

@@ -62,11 +62,43 @@ public class MessageConsumer implements Runnable {
 
     @Override
     public void run() {
-        log.info("=== MessageConsumer starting WebSocket connection ===");
+        log.info("=== MessageConsumer starting WebSocket lifecycle ===");
         baselineCache = repository.getAllRWBasePrice(RW_BASE_PRICE);
 
-        WebsocketClientImpl client = new WebsocketClientImpl();
-        client.allRollingWindowTicker("1h", this::onMarketEvent);
+        while (!Thread.currentThread().isInterrupted()) {
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            
+            try {
+                log.info("[WS] Attempting to connect to Binance allRollingWindowTicker (1h)...");
+                WebsocketClientImpl client = new WebsocketClientImpl();
+                
+                client.allRollingWindowTicker(
+                    "1h",
+                    open -> log.info("[WS] Connection Established ✅"),
+                    this::onMarketEvent,
+                    close -> {
+                        log.warn("[WS] Connection Closing: {}", close);
+                        latch.countDown();
+                    },
+                    fail -> {
+                        log.error("[WS] Connection Failed/Reset ❌");
+                        latch.countDown();
+                    }
+                );
+
+                // Block this thread until the connection closes or fails
+                latch.await();
+                log.info("[WS] Connection lost. Reconnecting in 5 seconds...");
+                Thread.sleep(5000);
+                
+            } catch (InterruptedException e) {
+                log.info("[WS] MessageConsumer interrupted. Shutting down.");
+                break;
+            } catch (Exception e) {
+                log.error("[WS] Unexpected error in connection loop: {}", e.getMessage());
+                try { Thread.sleep(5000); } catch (InterruptedException ie) { break; }
+            }
+        }
     }
 
     // ── WebSocket event handler ───────────────────────────────────────────────

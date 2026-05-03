@@ -78,6 +78,14 @@ These engines process raw data and publish metrics to Redis.
 *   **Purpose**: Deep-dive analysis of 12 timeframes (5m to 1 Month).
 *   **Critical Logic**: Uses a **Time-Weight Decay** model where 1h and 4h moves carry more weight than 5m noise.
 
+### 10. Profit Trend Analyzer
+*   **Script**: `profit_020_trend_analyzer.py`
+*   **Run Command**: `../venv313/bin/python3 profit_020_trend_analyzer.py`
+*   **Purpose**: Post-success performance tracking.
+*   **Critical Logic**: 
+    *   Calculates **Volume Bias**: Detects if volume growth is sustained after hitting the $0.20 profit target.
+    *   Generates a **Price Trend History** stored in Redis for visualization on the "Success Radar" dashboard.
+
 ---
 
 ## ☕ Java Execution Stack (7 Algorithms)

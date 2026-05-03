@@ -31,10 +31,9 @@ class RiskManagementBot:
         self.engine = RiskEngine()
 
     async def run(self):
-        log.info("🛡️  [INITIALIZING] Risk Management Engine...")
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            fetcher = DataFetcher(session)
+        log.info("🛡️  [INITIALIZING] Risk Management Engine (Resilient CCXT Mode)...")
+        fetcher = DataFetcher()
+        try:
             while True:
                 portfolio_state = self.portfolio.get_state()
                 log.info(f"Equity: {portfolio_state['equity']} | Drawdown: {portfolio_state['drawdown']:.2%}")
@@ -44,6 +43,8 @@ class RiskManagementBot:
                 
                 log.info(f"Risk cycle complete. Waiting {self.interval_sec}s...")
                 await asyncio.sleep(self.interval_sec)
+        finally:
+            await fetcher.close()
 
     async def process_symbol(self, fetcher, symbol, portfolio_state):
         try:
@@ -51,10 +52,7 @@ class RiskManagementBot:
             klines = await fetcher.fetch_klines(symbol)
             if not klines: return
 
-            df = pd.DataFrame(klines, columns=[
-                'time', 'open', 'high', 'low', 'close', 'volume', 
-                'close_time', 'q_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore'
-            ])
+            df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
             df[['high','low','close']] = df[['high','low','close']].astype(float)
 
             # 2. Calculate Indicators (ATR)

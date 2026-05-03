@@ -30,15 +30,16 @@ class TrendAlignmentBot:
         self.redis_client = redis.Redis(host='127.0.0.1', port=6379, decode_responses=True)
 
     async def run(self):
-        log.info(f"📊 [INITIALIZING] Trend Alignment Engine for {self.symbols}")
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            fetcher = DataFetcher(session)
+        log.info(f"📊 [INITIALIZING] Trend Alignment Engine (Resilient CCXT Mode) for {self.symbols}")
+        fetcher = DataFetcher()
+        try:
             while True:
                 tasks = [self.process_symbol(fetcher, symbol) for symbol in self.symbols]
                 await asyncio.gather(*tasks)
                 log.info(f"Scanner cycle complete. Waiting {self.interval_sec}s...")
                 await asyncio.sleep(self.interval_sec)
+        finally:
+            await fetcher.close()
 
     async def process_symbol(self, fetcher, symbol):
         try:

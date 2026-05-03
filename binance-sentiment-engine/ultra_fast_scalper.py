@@ -1,19 +1,27 @@
 import asyncio
 import os
+import time
 import pandas as pd
-import ta
+# import ta  <-- Removed to solve ModuleNotFoundError
 import logging
 import json
+import ccxt.async_support as ccxt
 from datetime import datetime
-from binance.client import AsyncClient
-from binance.exceptions import BinanceAPIException
 from decimal import Decimal, ROUND_DOWN
-from dotenv import load_dotenv
+# from dotenv import load_dotenv  <-- Removed to solve ModuleNotFoundError
+
+def manual_load_dotenv(path):
+    if not os.path.exists(path): return
+    with open(path, 'r') as f:
+        for line in f:
+            if '=' in line and not line.startswith('#'):
+                k, v = line.strip().split('=', 1)
+                os.environ[k] = v.strip('"').strip("'")
 
 # ─── LOAD ENVIRONMENT ────────────────────────────────────────────────────────
 # Load keys from the shared dashboard .env
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", ".env")
-load_dotenv(dotenv_path)
+manual_load_dotenv(dotenv_path)
 
 API_KEY    = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_SECRET_KEY") # JS uses SECRET_KEY, Python typically SECRET
@@ -47,11 +55,11 @@ class MultiSymbolScalper:
         self.symbols = []
         self.active_positions = {} # symbol -> {buy_price, qty}
         
-        # Dynamic Settings
+        # Dynamic Settings (Aligned with User Micro-Trend Strategy)
         self.auto_enabled = False
-        self.buy_amount_usdt = 12.0
+        self.buy_amount_usdt = 100.0
         self.profit_target_usdt = 0.20
-        self.stop_loss_usdt = 0.10
+        self.stop_loss_usdt = 0.50
 
         # Filter cache
         self.filters = {} # symbol -> {step_size, tick_size, min_notional}
@@ -87,42 +95,77 @@ class MultiSymbolScalper:
             log.error("❌ API Keys missing! Check Redis or dashboard/.env file.")
             exit(1)
 
-        self.client = await AsyncClient.create(final_key, final_secret)
+        self.client = ccxt.binance({
+            'apiKey': final_key,
+            'secret': final_secret,
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
         
         # 3. Load Symbols
         await self.refresh_symbols()
         log.info(f"📊 Initialized with {len(self.symbols)} USDT pairs from Redis.")
 
     async def refresh_symbols(self):
-        """Fetch the latest Top USDT pairs from Redis."""
+        """Fetch the latest Top USDT pairs + Fast Movers from Redis."""
         if not self.redis: return
         try:
+            # 1. Base symbols from SYMBOLS:ACTIVE
             raw = self.redis.get(SYMBOL_LIST_KEY)
+            base_symbols = []
             if raw:
-                # Remove slashes if present (e.g., BTC/USDT -> BTCUSDT)
-                self.symbols = [s.replace("/", "") for s in json.loads(raw)]
-                # Pre-fetch filters for new symbols
-                for sym in self.symbols[:50]: # Only fetch filters for top 50 to avoid rate limit at start
-                    if sym not in self.filters:
-                        await self.fetch_filters(sym)
+                base_symbols = json.loads(raw)
+
+            # 2. Add Fast Movers dynamically from various Redis keys
+            fast_keys = [
+                "FAST_MOVE", "LT2MIN_0>3", "ULTRA_FAST0>2", "ULTRA_FAST2>3",
+                "ULTRA_FAST0>3", "ULTRA_FAST>3<5", "SUPER_FAST>2<3", "ULTRA_SUPER_FAST>5<7"
+            ]
+            fast_movers = set()
+            for key in fast_keys:
+                try:
+                    # These are usually hashes
+                    fm = self.redis.hkeys(key)
+                    if fm:
+                        for s in fm:
+                            # Convert to standard format (e.g. BTCUSDT -> BTC/USDT)
+                            if s.endswith("USDT"):
+                                fast_movers.add(f"{s[:-4]}/{s[-4:]}")
+                            else:
+                                fast_movers.add(s)
+                except Exception:
+                    pass
+
+            # Combine and deduplicate
+            combined = list(set(base_symbols) | fast_movers)
+            
+            # CCXT uses slashes (BTC/USDT)
+            self.symbols = [s if "/" in s else f"{s[:-4]}/{s[-4:]}" for s in combined]
+            
+            # Pre-fetch filters for new symbols
+            for sym in self.symbols[:100]: # Fetch filters for top 100
+                if sym not in self.filters:
+                    await self.fetch_filters(sym)
+                    
+            log.info(f"📊 Symbol Refresh: {len(self.symbols)} pairs ({len(fast_movers)} from Fast Scan)")
         except Exception as e:
             log.error(f"⚠️ Symbol refresh failed: {e}")
 
     async def fetch_filters(self, symbol):
         """Fetch trading rules for a symbol."""
         try:
-            info = await self.client.get_symbol_info(symbol)
-            if not info: return
+            # In CCXT, load markets first
+            if not self.client.markets:
+                await self.client.load_markets()
             
-            f_data = {"step_size": 0.0, "tick_size": 0.0, "min_notional": 10.0}
-            for f in info['filters']:
-                if f['filterType'] == 'LOT_SIZE':
-                    f_data["step_size"] = float(f['stepSize'])
-                if f['filterType'] == 'PRICE_FILTER':
-                    f_data["tick_size"] = float(f['tickSize'])
-                if f['filterType'] == 'NOTIONAL' or f['filterType'] == 'MIN_NOTIONAL':
-                    f_data["min_notional"] = float(f.get('minNotional', f.get('notional', 10.0)))
-            self.filters[symbol] = f_data
+            market = self.client.market(symbol)
+            if not market: return
+            
+            self.filters[symbol] = {
+                "step_size": float(market['limits']['amount']['min'] or 0.0001),
+                "tick_size": float(market['precision']['price'] or 0.00001),
+                "min_notional": float(market['limits']['cost']['min'] or 10.0)
+            }
         except Exception:
             pass
 
@@ -134,49 +177,71 @@ class MultiSymbolScalper:
             if raw:
                 cfg = json.loads(raw)
                 self.auto_enabled = cfg.get("autoBuyEnabled", False)
-                self.buy_amount_usdt = cfg.get("buyAmountUsdt", 12.0)
+                self.buy_amount_usdt = cfg.get("buyAmountUsdt", 100.0)
                 self.profit_target_usdt = cfg.get("profitAmountUsdt", 0.20)
-                self.stop_loss_usdt = self.profit_target_usdt / 2.0
+                self.stop_loss_usdt = 0.50
         except Exception:
             pass
 
     async def get_indicators(self, symbol: str):
         """Fetch data and compute indicators for a symbol."""
         try:
-            klines = await self.client.get_klines(symbol=symbol, interval="1m", limit=60)
-            df = pd.DataFrame(klines, columns=[
-                'time', 'open', 'high', 'low', 'close', 'vol', 'close_time',
-                'q_vol', 'trades', 't_buy_base', 't_buy_quote', 'ignore'
-            ]).astype(float)
+            # CCXT fetch_ohlcv returns [timestamp, open, high, low, close, volume]
+            klines = await self.client.fetch_ohlcv(symbol, timeframe='1m', limit=60)
+            df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'vol'])
+            df = df.astype(float)
 
-            df['ema9']  = ta.trend.ema_indicator(df['close'], window=EMA_FAST)
-            df['ema21'] = ta.trend.ema_indicator(df['close'], window=EMA_MID)
-            df['ema50'] = ta.trend.ema_indicator(df['close'], window=EMA_SLOW)
-            df['rsi']   = ta.momentum.rsi(df['close'], window=RSI_PERIOD)
+            # Replacement for 'ta' library logic using pure pandas
+            df['ema9']  = df['close'].ewm(span=EMA_FAST, adjust=False).mean()
+            df['ema21'] = df['close'].ewm(span=EMA_MID, adjust=False).mean()
+            df['ema50'] = df['close'].ewm(span=EMA_SLOW, adjust=False).mean()
+            
+            # Pure Pandas RSI (Standard Wilder's Method)
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=RSI_PERIOD).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=RSI_PERIOD).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
             df['v_avg'] = df['vol'].rolling(window=VOL_PERIOD).mean()
             return df
         except Exception:
             return None
 
     def evaluate_entry(self, symbol, df, btc_df):
-        """Scalping Pullback Strategy."""
-        if df is None or btc_df is None or len(df) < 50: return False
+        """Micro-Trend Momentum Acceleration Strategy."""
+        if df is None or btc_df is None or len(df) < 20: return False, None
         
         curr = df.iloc[-1]
+        prev = df.iloc[-2]
         btc  = btc_df.iloc[-1]
 
-        # BTC Trend Filter (Must be healthy)
-        btc_ok = btc['ema9'] > btc['ema21']
+        # BTC Trend Filter (Must not be crashing)
+        btc_ok = btc['close'] > btc['ema21']
         
-        # Symbol Trend
+        # 1. TREND: EMAs are stacked (9 > 21 > 50)
         uptrend = curr['ema9'] > curr['ema21'] > curr['ema50']
-        # Pullback: Low touched EMA9 or EMA21
-        pullback = curr['low'] <= (curr['ema9'] * 1.001) or curr['low'] <= (curr['ema21'] * 1.001)
-        rsi_ok = 50 < curr['rsi'] < 75
-        vol_ok = curr['vol'] > (curr['v_avg'] * 1.05)
+        
+        # 2. ACCELERATION: Current price breaking above previous high (Micro-breakout)
+        breakout = curr['close'] > prev['high']
+        
+        # 3. MOMENTUM: RSI is strong but not exhausted
+        rsi_ok = 60 < curr['rsi'] < 82
+        
+        # 4. VELOCITY: Volume is surging
+        vol_ok = curr['vol'] > (curr['v_avg'] * 1.5)
+        
         bullish = curr['close'] > curr['open']
 
-        return all([uptrend, pullback, rsi_ok, vol_ok, bullish, btc_ok])
+        # Signal Matrix
+        matrix = {
+            "btc_stable": bool(btc_ok),
+            "trend_stacked": bool(uptrend),
+            "micro_breakout": bool(breakout),
+            "rsi_momentum": bool(rsi_ok),
+            "volume_surge": bool(vol_ok),
+            "bullish_candle": bool(bullish)
+        }
+        return all(matrix.values()), matrix
 
     async def process_symbol(self, symbol, btc_df):
         """Analyze and trade a single symbol."""
@@ -207,13 +272,15 @@ class MultiSymbolScalper:
 
         # 2. Look for new entry
         df = await self.get_indicators(symbol)
-        if self.evaluate_entry(symbol, df, btc_df):
+        should_buy, matrix = self.evaluate_entry(symbol, df, btc_df)
+        
+        # Broadcast detailed matrix
+        self.broadcast_signal(symbol, "BUY" if should_buy else "NEUTRAL", df.iloc[-1]['close'] if df is not None else 0, matrix)
+
+        if should_buy:
             await self.execute_buy(symbol, df.iloc[-1]['close'])
 
     async def execute_buy(self, symbol, price):
-        # Broadcast signal to Redis first
-        self.broadcast_signal(symbol, "BUY", price)
-        
         if not self.auto_enabled:
             return
 
@@ -228,9 +295,9 @@ class MultiSymbolScalper:
             if (qty * price) < f['min_notional']: return
 
             log.info(f"🛒 [SCALPER] Buying {symbol} @ {price}")
-            order = await self.client.order_market_buy(symbol=symbol, quantity=qty)
+            order = await self.client.create_market_buy_order(symbol, qty)
             
-            exec_price = float(order['fills'][0]['price']) if order['fills'] else price
+            exec_price = float(order.get('average', order.get('price', price)))
             self.active_positions[symbol] = {'buy_price': exec_price, 'qty': qty}
         except Exception as e:
             log.error(f"❌ Buy {symbol} failed: {e}")
@@ -240,15 +307,22 @@ class MultiSymbolScalper:
         try:
             qty = self.active_positions[symbol]['qty']
             log.info(f"⚡ [SCALPER] Selling {symbol} @ {price}")
-            await self.client.order_market_sell(symbol=symbol, quantity=qty)
+            await self.client.create_market_sell_order(symbol, qty)
             del self.active_positions[symbol]
         except Exception as e:
             log.error(f"❌ Sell {symbol} failed: {e}")
 
-    def broadcast_signal(self, symbol, status, price):
+    def broadcast_signal(self, symbol, status, price, matrix=None):
         if not self.redis: return
-        payload = {"symbol": symbol, "signal": status, "price": price, "ts": datetime.now().isoformat()}
-        self.redis.set(f"{SIGNAL_PREFIX}{symbol}", json.dumps(payload), ex=30)
+        payload = {
+            "symbol": symbol, 
+            "signal": status, 
+            "price": price, 
+            "matrix": matrix, 
+            "ts": datetime.now().isoformat()
+        }
+        clean_symbol = symbol.replace("/", "")
+        self.redis.set(f"{SIGNAL_PREFIX}{clean_symbol}", json.dumps(payload), ex=30)
 
     def round_step(self, qty, step):
         if not step: return float(int(qty))
@@ -269,7 +343,7 @@ class MultiSymbolScalper:
                     await self.refresh_symbols()
                     last_symbol_refresh = time.time()
 
-                btc_df = await self.get_indicators("BTCUSDT")
+                btc_df = await self.get_indicators("BTC/USDT")
                 if btc_df is None: 
                     await asyncio.sleep(5)
                     continue

@@ -19,10 +19,14 @@ class VolumeProfileEngine:
             return None
 
         # Prepare DataFrame
-        df = pd.DataFrame(klines, columns=[
-            'time', 'open', 'high', 'low', 'close', 'volume', 
-            'close_time', 'quote_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore'
-        ])
+        num_cols = len(klines[0])
+        if num_cols >= 12:
+            cols = ['time', 'open', 'high', 'low', 'close', 'volume', 
+                    'close_time', 'quote_vol', 'trades', 't_buy_vol', 't_buy_q_vol', 'ignore']
+        else:
+            cols = ['time', 'open', 'high', 'low', 'close', 'volume']
+            
+        df = pd.DataFrame(klines, columns=cols[:num_cols])
         
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)

@@ -55,8 +55,12 @@ public class RuleThree implements Runnable {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 evaluate();
+                Thread.sleep(500);
+            } catch (InterruptedException ie) {
+                break;
             } catch (Exception e) {
                 log.error("RuleThree error: {}", e.getMessage(), e);
+                try { Thread.sleep(2000); } catch (InterruptedException ie) { break; }
             }
         }
     }

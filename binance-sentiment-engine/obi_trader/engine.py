@@ -3,7 +3,8 @@ import json
 import logging
 import time
 import redis
-import aiohttp
+import redis
+import ccxt
 import websockets
 import ssl
 
@@ -22,13 +23,19 @@ logging.basicConfig(
 log = logging.getLogger("OBITrader")
 
 class OBITraderEngine:
-    def __init__(self, symbol="BTCUSDT", live=False, trade_amount=12.0, redis_host="127.0.0.1"):
+    def __init__(self, symbol="BTCUSDT", live=False, trade_amount=100.0, redis_host="127.0.0.1"):
         self.symbol = symbol.upper()
         self.book = OrderBookManager(self.symbol)
         self.metrics_calc = ImbalanceCalculator()
         self.signal_gen = SignalGenerator()
         self.executor = ExecutionManager(live=live, trade_amount_usdt=trade_amount)
         self.strategy = StrategyManager(self.executor)
+        
+        # Initialize CCXT
+        self.ccxt_client = ccxt.binance({
+            'enableRateLimit': True,
+            'options': {'defaultType': 'spot'}
+        })
         
         # Redis Connection with descriptive error handling
         try:
@@ -53,13 +60,26 @@ class OBITraderEngine:
         )
 
     async def _snapshot_loop(self):
-        """Fetches initial snapshot and could periodically refresh if needed."""
-        url = f"https://api.binance.com/api/v3/depth?symbol={self.symbol}&limit=1000"
-        connector = aiohttp.TCPConnector(ssl=False)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(url) as resp:
-                snapshot = await resp.json()
-                self.book.handle_snapshot(snapshot)
+        """Fetches initial order book snapshot using CCXT."""
+        try:
+            # CCXT expects symbol with slash
+            ccxt_symbol = self.symbol if "/" in self.symbol else f"{self.symbol[:-4]}/{self.symbol[-4:]}"
+            log.info(f"📡 Fetching depth snapshot for {self.symbol} using CCXT...")
+            
+            snapshot = await self.ccxt_client.fetch_order_book(ccxt_symbol, limit=1000)
+            
+            # Convert CCXT format to the format handle_snapshot expects
+            # CCXT: {'bids': [[price, qty], ...], 'asks': ...}
+            # Binance REST: {'bids': [['price', 'qty'], ...], 'asks': ...}
+            formatted_snapshot = {
+                "lastUpdateId": snapshot.get("nonce", 0),
+                "bids": [[str(p), str(q)] for p, q in snapshot['bids']],
+                "asks": [[str(p), str(q)] for p, q in snapshot['asks']]
+            }
+            self.book.handle_snapshot(formatted_snapshot)
+            log.info(f"✅ Depth snapshot loaded for {self.symbol}")
+        except Exception as e:
+            log.error(f"❌ [SNAPSHOT ERROR] Failed to fetch depth for {self.symbol}: {e}")
 
     async def _ws_loop(self):
         uri = f"wss://stream.binance.com:9443/ws/{self.symbol.lower()}@depth"

@@ -44,16 +44,14 @@ BINANCE_BASE = "https://api.binance.com"
 
 # (display_name, binance_interval, candle_limit, weight, category)
 TIMEFRAME_CONFIG = [
-    ("5m",  "5m",  60,  0.12, "short"),
-    ("15m", "15m", 48,  0.11, "short"),
+    ("1m",  "1m",  60,  0.25, "micro"), # High weight for micro-trend
+    ("5m",  "5m",  60,  0.15, "short"),
+    ("15m", "15m", 48,  0.10, "short"),
     ("1h",  "1h",  48,  0.10, "short"),
-    ("2h",  "2h",  48,  0.09, "mid"),
-    ("4h",  "4h",  48,  0.09, "mid"),
-    ("8h",  "8h",  48,  0.08, "mid"),
-    ("1d",  "1d",  60,  0.08, "long"),
-    ("3d",  "3d",  30,  0.07, "long"),
-    ("1w",  "1w",  30,  0.07, "long"),
-    ("1M",  "1M",  24,  0.07, "long"),
+    ("4h",  "4h",  48,  0.10, "mid"),
+    ("1d",  "1d",  60,  0.10, "long"),
+    ("1w",  "1w",  30,  0.10, "long"),
+    ("1M",  "1M",  24,  0.10, "long"),
 ]
 
 BUY_THRESHOLD  = 70
