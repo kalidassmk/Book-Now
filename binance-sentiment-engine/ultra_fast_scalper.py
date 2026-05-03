@@ -10,6 +10,13 @@ from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 # from dotenv import load_dotenv  <-- Removed to solve ModuleNotFoundError
 
+# WebSocket-backed kline cache replaces fetch_ohlcv polling.
+# When unavailable (older deployments), fall back to CCXT REST.
+try:
+    from klines_ws_cache import KlinesCache  # type: ignore
+except Exception:
+    KlinesCache = None  # type: ignore
+
 def manual_load_dotenv(path):
     if not os.path.exists(path): return
     with open(path, 'r') as f:
@@ -54,7 +61,7 @@ class MultiSymbolScalper:
         self.is_running = True
         self.symbols = []
         self.active_positions = {} # symbol -> {buy_price, qty}
-        
+
         # Dynamic Settings (Aligned with User Micro-Trend Strategy)
         self.auto_enabled = False
         self.buy_amount_usdt = 100.0
@@ -63,6 +70,15 @@ class MultiSymbolScalper:
 
         # Filter cache
         self.filters = {} # symbol -> {step_size, tick_size, min_notional}
+
+        # WebSocket-backed kline buffer. One multiplexed connection feeds
+        # 1m candles for every active symbol; reads are O(1) and free.
+        # Cold-start (first few seconds) falls back to CCXT REST.
+        self.klines_cache = (
+            KlinesCache(intervals=("1m",), buffer_size=120)
+            if KlinesCache is not None else None
+        )
+        self._klines_cache_started = False
 
     async def initialize(self):
         log.info("🚀 Initializing Multi-Symbol Scalper Engine...")
@@ -186,10 +202,34 @@ class MultiSymbolScalper:
     async def get_indicators(self, symbol: str):
         """Fetch data and compute indicators for a symbol."""
         try:
-            # CCXT fetch_ohlcv returns [timestamp, open, high, low, close, volume]
-            klines = await self.client.fetch_ohlcv(symbol, timeframe='1m', limit=60)
-            df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'vol'])
-            df = df.astype(float)
+            api_symbol = symbol.replace("/", "")
+
+            # Hot path: read 1m candles from the in-memory WebSocket buffer.
+            # If the cache isn't warm for this symbol yet, register it and
+            # serve the very first request from REST while the seed lands.
+            df = None
+            if self.klines_cache is not None:
+                if not self._klines_cache_started:
+                    await self.klines_cache.start()
+                    self._klines_cache_started = True
+                await self.klines_cache.ensure(api_symbol, ["1m"])
+                if self.klines_cache.has(api_symbol, "1m"):
+                    cached_df = self.klines_cache.get_klines(api_symbol, "1m", 60)
+                    if not cached_df.empty:
+                        df = cached_df.rename(columns={
+                            "timestamp": "time", "volume": "vol",
+                        })[["time", "open", "high", "low", "close", "vol"]].copy()
+
+            if df is None:
+                # Cold start (or cache disabled) — single REST seed request.
+                klines = await self.client.fetch_ohlcv(symbol, timeframe='1m', limit=60)
+                df = pd.DataFrame(klines, columns=['time', 'open', 'high', 'low', 'close', 'vol'])
+
+            # The cache returns pandas-typed columns already, but a REST seed
+            # comes back as Python ints/floats — astype is safe in both cases
+            # for columns that are already float, and idempotent.
+            for col in ('open', 'high', 'low', 'close', 'vol'):
+                df[col] = df[col].astype(float)
 
             # Replacement for 'ta' library logic using pure pandas
             df['ema9']  = df['close'].ewm(span=EMA_FAST, adjust=False).mean()

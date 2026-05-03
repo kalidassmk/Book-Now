@@ -5,6 +5,13 @@ import logging
 from datetime import datetime, timedelta
 import ccxt
 
+# Shared WebSocket cache for 24h tickers (replaces ccxt.fetch_tickers() polling).
+# Falls back to REST CCXT below if the module is missing on this machine.
+try:
+    from tickers_ws_cache import get_default_cache
+except Exception:
+    get_default_cache = None  # type: ignore
+
 # ==========================================
 # 1. LOGGING & CONFIG
 # ==========================================
@@ -23,10 +30,18 @@ MAX_TRACKING_HOURS = 4    # Stop tracking coins after 4 hours of inactivity
 class Profit020TrendAnalyzer:
     def __init__(self):
         self.r = redis.Redis(**LOCAL_REDIS)
+        # CCXT is kept around for the one-shot historical kline seed
+        # (fetch_historical_context). The hot path — bulk ticker reads —
+        # now goes through the WebSocket cache.
         self.ccxt = ccxt.binance({
             'enableRateLimit': True,
             'options': {'defaultType': 'spot'}
         })
+        self.tickers_cache = get_default_cache() if get_default_cache else None
+        if self.tickers_cache:
+            log.info("📡 Using TickersCache (!miniTicker@arr WS) — REST fetch_tickers disabled.")
+        else:
+            log.warning("⚠️ tickers_ws_cache not available — falling back to REST polling.")
 
     def fetch_historical_context(self, ccxt_symbol):
         """Fetches last 10 minutes of 1m candles as initial context."""
@@ -74,24 +89,42 @@ class Profit020TrendAnalyzer:
 
                 symbols = list(hits.keys())
                 now_ts = time.time()
-                tickers = {}
-                try:
-                    tickers = self.ccxt.fetch_tickers()
-                except Exception as e:
-                    log.error(f"Failed to fetch bulk tickers: {e}")
-                    time.sleep(10)
-                    continue
+
+                # Resolve tickers without hitting Binance REST. The cache
+                # is fed by a single !miniTicker@arr WebSocket subscription
+                # that updates ~once per second for every spot symbol, so a
+                # per-symbol lookup is O(1) and free.
+                if self.tickers_cache is None:
+                    try:
+                        tickers_rest = self.ccxt.fetch_tickers()
+                    except Exception as e:
+                        log.error(f"Failed to fetch bulk tickers: {e}")
+                        time.sleep(10)
+                        continue
+                else:
+                    tickers_rest = None
 
                 for symbol in symbols:
                     try:
                         ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
-                        if ccxt_symbol not in tickers: continue
-                            
-                        ticker = tickers[ccxt_symbol]
-                        curr_price = ticker['last']
-                        curr_vol = ticker['quoteVolume']
-                        daily_high = ticker['high']
-                        daily_low = ticker['low']
+
+                        if self.tickers_cache is not None:
+                            t = self.tickers_cache.get_ticker(symbol)
+                            if not t:
+                                # Not seen yet (cold start) — skip this round; will arrive within ~1s.
+                                continue
+                            curr_price = t['last']
+                            curr_vol   = t['quoteVolume']
+                            daily_high = t['high']
+                            daily_low  = t['low']
+                        else:
+                            if ccxt_symbol not in tickers_rest:
+                                continue
+                            ticker = tickers_rest[ccxt_symbol]
+                            curr_price = ticker['last']
+                            curr_vol = ticker['quoteVolume']
+                            daily_high = ticker['high']
+                            daily_low = ticker['low']
                         
                         # --- FOMO FILTER: Avoid buying at the daily peak ---
                         # Calculate price position in 24h range (0 to 1.0)
@@ -179,8 +212,10 @@ class Profit020TrendAnalyzer:
                         log.error(f"Error processing {symbol}: {e}")
                         continue
 
-                # Sleep 15s to respect rate limits (fetch_tickers is heavy)
-                time.sleep(15)
+                # Cache reads are free, but each loop iteration writes to
+                # Redis per tracked symbol. 5s gives ~3× responsiveness vs
+                # the old 15s REST-bounded cadence without measurable cost.
+                time.sleep(5 if self.tickers_cache is not None else 15)
             except Exception as e:
                 log.error(f"Main Loop Error: {e}")
                 time.sleep(15)
