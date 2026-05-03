@@ -75,6 +75,14 @@ public class BinanceUserDataStreamService {
 
     private final BinanceWsApiClient wsApi = new BinanceWsApiClient();
 
+    /**
+     * Epoch-ms after which it is OK to talk to Binance again. While
+     * {@link BinanceWsApiClient.BinanceIpBannedException} is being thrown,
+     * we set this to (now + Retry-After) so subsequent keepalive ticks
+     * skip the connect attempt instead of digging the ban deeper.
+     */
+    private final java.util.concurrent.atomic.AtomicLong banUntilMs = new java.util.concurrent.atomic.AtomicLong(0);
+
     /** Latest listenKey we obtained from Binance. */
     private final AtomicReference<String> listenKey = new AtomicReference<>();
 
@@ -113,6 +121,12 @@ public class BinanceUserDataStreamService {
     @Scheduled(fixedRate = 25 * 60 * 1000L)
     public void keepAlive() {
         if (!liveMode) return;
+        long until = banUntilMs.get();
+        if (until > 0 && System.currentTimeMillis() < until) {
+            long secsLeft = (until - System.currentTimeMillis()) / 1000;
+            log.warn("[UserDataStream] IP-banned by Binance — sleeping ~{}s before retry", secsLeft);
+            return;
+        }
         String key = listenKey.get();
         if (key == null || socket.get() == null) {
             log.info("[UserDataStream] No active stream — reconnecting");
@@ -142,8 +156,27 @@ public class BinanceUserDataStreamService {
             Closeable old = socket.getAndSet(c);
             closeQuietly(old);
             log.info("[UserDataStream] Websocket subscribed — balance + order updates are now push-driven");
+        } catch (BinanceWsApiClient.BinanceIpBannedException ban) {
+            // Don't dump a stack trace — this is a known, expected,
+            // operator-actionable condition. Mark the cool-down so the
+            // keepalive scheduler skips the next N ticks.
+            long retry = ban.retryAfterSeconds > 0 ? ban.retryAfterSeconds : 120;
+            banUntilMs.set(System.currentTimeMillis() + retry * 1000L);
+            log.error("[UserDataStream] Binance IP BAN active — will retry in ~{}s. "
+                + "Cause: too many recent requests (HTTP 418/429). Stop other Binance clients "
+                + "and let the cooldown elapse.", retry);
+            closeSocketQuietly();
+            listenKey.set(null);
         } catch (Exception e) {
-            log.error("[UserDataStream] Failed to connect: {}. Will retry on next keepalive.", e.getMessage(), e);
+            // Special-case ban exceptions wrapped in another runtime
+            if (BinanceWsApiClient.isIpBan(e)) {
+                long retry = BinanceWsApiClient.extractRetryAfterSeconds(e);
+                if (retry <= 0) retry = 120;
+                banUntilMs.set(System.currentTimeMillis() + retry * 1000L);
+                log.error("[UserDataStream] Binance IP BAN active — will retry in ~{}s.", retry);
+            } else {
+                log.error("[UserDataStream] Failed to connect: {}. Will retry on next keepalive.", e.getMessage(), e);
+            }
             closeSocketQuietly();
             listenKey.set(null);
         }
