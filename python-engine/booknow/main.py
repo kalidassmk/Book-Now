@@ -46,6 +46,8 @@ from booknow.processors.fast_move_filter import FastMoveFilter
 from booknow.processors.time_analyser import TimeAnalyser
 from booknow.processors.ulf_0_to_3 import UlfZeroToThree
 from booknow.repository.redis_client import close_redis, get_redis
+from booknow.config.trading_config import TradingConfigService
+from booknow.trading.executor import TradeExecutor
 from booknow.trading.monitor import LoggingExecutor, PositionMonitor
 from booknow.trading.state import TradeState
 from booknow.trading.tsl import TrailingStopLoss
@@ -89,6 +91,23 @@ async def _bootstrap() -> None:
     except Exception as e:
         log.warning("  redis ping FAILED: %s — continuing; tasks may fail until Redis is up", e)
 
+    # ── TradingConfig (Redis-backed, dashboard-editable) ─────────────
+    config_service = TradingConfigService(redis_client=redis)
+    initial_config = await config_service.init()
+    log.info(
+        "  trading-config loaded: autoBuy=%s fastScalp=%s buyAmount=$%s profit=$%s tsl=%s%% maxHold=%ss",
+        initial_config.autoBuyEnabled, initial_config.fastScalpMode,
+        initial_config.buyAmountUsdt, initial_config.profitAmountUsdt,
+        initial_config.tslPct, initial_config.maxHoldSeconds,
+    )
+
+    # WS-API client — always instantiated (it doesn't connect until used).
+    # Live methods (signed orders) only fire when settings.live_mode is True.
+    ws_api = WsApiClient(
+        api_key=settings.binance_api_key,
+        secret_key=settings.binance_secret_key,
+    )
+
     # ── Phase 6: shared REST client + cache services ─────────────────
     rest = RestApiClient(
         api_key=settings.binance_api_key,
@@ -128,24 +147,39 @@ async def _bootstrap() -> None:
         await proc.start()
     log.info("  processors started: ulf_0_to_3, fast_analyse, time_analyser, fast_move_filter")
 
-    # ── Phase 9: position state + TSL + unified monitor ──────────────
-    # TradeState is the single source of truth for open positions.
-    # TrailingStopLoss owns per-symbol high-water marks.
-    # PositionMonitor ticks every second, checking TSL + max-hold and
-    # firing forced exits via the executor. Phase 10 plugs in the real
-    # TradeExecutor; until then LoggingExecutor logs intended exits.
+    # ── Phase 9 + 10: state, TSL, monitor, and the real TradeExecutor ─
     trade_state = TradeState()
-    tsl = TrailingStopLoss(trailing_percentage=2.0)
-    exit_executor = LoggingExecutor()  # Phase 10 replaces this
+    tsl = TrailingStopLoss(trailing_percentage=initial_config.tslPct)
+
+    # The real executor — paper mode is just live_mode=False on this same
+    # class; it logs intended orders without sending them. Replaces the
+    # LoggingExecutor stub Phase 9 used.
+    trade_executor = TradeExecutor(
+        redis_client=redis,
+        ws_api=ws_api,
+        filter_service=filter_service,
+        delist_service=delist_service,
+        trade_state=trade_state,
+        tsl=tsl,
+        config_service=config_service,
+        dust_service=None,            # filled in below in live mode
+        coin_analyzer=None,           # CoinAnalyzer wired in a later phase
+        live_mode=settings.live_mode,
+    )
+
     position_monitor = PositionMonitor(
         redis_client=redis,
         trade_state=trade_state,
         tsl=tsl,
-        executor=exit_executor,
-        max_hold_seconds=300,
+        executor=trade_executor,
+        max_hold_seconds=initial_config.maxHoldSeconds,
     )
     await position_monitor.start()
-    log.info("  position-monitor started (TSL=2%%, max-hold=300s, exit=LoggingExecutor stub)")
+    log.info(
+        "  position-monitor started (executor=%s, TSL=%.1f%%, max-hold=%ss)",
+        "TradeExecutor[live]" if settings.live_mode else "TradeExecutor[paper]",
+        initial_config.tslPct, initial_config.maxHoldSeconds,
+    )
 
     # ── Phase 4 + dust: live-mode-only services ──────────────────────
     user_data: UserDataStreamService | None = None
@@ -154,15 +188,14 @@ async def _bootstrap() -> None:
         if not (settings.binance_api_key and settings.binance_secret_key):
             log.error("  live_mode=True but Binance keys missing — user-data-stream + dust disabled")
         else:
-            ws_api = WsApiClient(
-                api_key=settings.binance_api_key,
-                secret_key=settings.binance_secret_key,
-            )
             balance_service = BalanceService(redis_client=redis, ws_api=ws_api)
             dust_service = DustService(
                 redis_client=redis, rest=rest, filter_service=filter_service,
             )
             await dust_service.start()
+            # Hand the dust service to the executor so +TARGET HIT and
+            # forced exits sweep leftover base-asset to BNB automatically.
+            trade_executor._dust = dust_service  # type: ignore[attr-defined]
 
             # User-data-stream pushes balance updates to BalanceService
             # AND triggers DustService's per-account dust evaluation.
