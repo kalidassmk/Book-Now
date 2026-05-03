@@ -8,14 +8,19 @@ Run:
     # or, after `pip install -e python-engine/`:
     booknow
 
-This module is the orchestrator that will eventually boot every async
-task in the system: market WS consumer, user-data-stream, trade
-executor, processors, rules, position monitor, sentiment analyzers,
-and the FastAPI HTTP layer. Each subsequent migration phase wires one
-more piece in here.
+This module is the orchestrator that boots every async task in the
+system. Each migration phase wires one more piece in here.
 
-Today (Phase 1) it just sets up logging + config + the rate-limit
-guard, then idles. Verifies the skeleton boots cleanly. No I/O.
+Today (Phase 4):
+  - Phase 1: logging + config + rate-limit guard
+  - Phase 4: user-data-stream service (only when BOOKNOW_LIVE_MODE=true).
+             Pulls listenKey via WS-API, opens stream subscription,
+             writes balance updates into Redis.
+
+Pending phases will add: market WS consumer (Phase 5), filter/dust/delist
+services (Phase 6), processors (Phase 8), trade state + monitor (Phase 9),
+trade executor (Phase 10), rules (Phase 11), sentiment integration
+(Phase 12), and the FastAPI HTTP layer (Phase 14).
 """
 
 from __future__ import annotations
@@ -24,9 +29,14 @@ import asyncio
 import logging
 import signal
 import sys
+from typing import List
 
+from booknow.binance.balances import BalanceService
 from booknow.binance.rate_limit import get_default as get_rate_limit_guard
+from booknow.binance.user_data import UserDataStreamService
+from booknow.binance.ws_api import WsApiClient
 from booknow.config.settings import get_settings
+from booknow.repository.redis_client import close_redis, get_redis
 
 
 def _configure_logging(debug: bool) -> None:
@@ -55,27 +65,65 @@ async def _bootstrap() -> None:
     if not settings.binance_api_key:
         log.warning("  BINANCE_API_KEY is not set — trading endpoints will fail until configured.")
 
-    # Touching the rate-limit guard now so its singleton is created on the
-    # main thread. Subsequent phases will hand it to every Binance caller.
     guard = get_rate_limit_guard()
     log.info("  rate-limit guard ready (banned=%s)", guard.is_banned())
 
-    log.info("Phase 1 skeleton up. No tasks are running yet — see migration plan.")
-    log.info("Press Ctrl-C to exit cleanly.")
+    # Redis client (lazy singleton). Touching it now so any connection
+    # error surfaces during boot rather than at the first event.
+    redis = get_redis()
+    try:
+        await redis.ping()
+        log.info("  redis ping OK")
+    except Exception as e:
+        log.warning("  redis ping FAILED: %s — continuing; tasks may fail until Redis is up", e)
 
-    # Idle until interrupted. Subsequent phases replace this with a real
-    # supervisor that spawns and watches every async task.
+    # ── Phase 4: user-data-stream ────────────────────────────────────
+    user_data: UserDataStreamService | None = None
+    if settings.live_mode:
+        if not (settings.binance_api_key and settings.binance_secret_key):
+            log.error("  live_mode=True but Binance keys missing — user-data-stream disabled")
+        else:
+            ws_api = WsApiClient(
+                api_key=settings.binance_api_key,
+                secret_key=settings.binance_secret_key,
+            )
+            balance_service = BalanceService(redis_client=redis, ws_api=ws_api)
+            user_data = UserDataStreamService(
+                ws_api=ws_api,
+                balance_service=balance_service,
+            )
+            # One-shot REST seed before WS subscribes (guard-protected).
+            await balance_service.seed_from_rest()
+            await user_data.start()
+            log.info("  user-data-stream task started")
+    else:
+        log.info("  user-data-stream skipped (live_mode=False)")
+
+    log.info("Engine running. Press Ctrl-C to stop.")
+
+    # Idle until interrupted. Subsequent phases will spawn their own
+    # tasks here; main.py's job is to supervise them and shut down
+    # cleanly on SIGINT/SIGTERM.
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, stop.set)
         except NotImplementedError:
-            # Windows; fall back to letting KeyboardInterrupt bubble.
-            pass
+            pass  # Windows; KeyboardInterrupt will bubble.
     try:
         await stop.wait()
     finally:
+        log.info("BookNow Python engine stopping…")
+        if user_data is not None:
+            try:
+                await user_data.stop()
+            except Exception as e:
+                log.warning("  user-data-stream stop error: %s", e)
+        try:
+            await close_redis()
+        except Exception:
+            pass
         log.info("BookNow Python engine stopped.")
 
 
@@ -84,7 +132,6 @@ def run() -> None:
     try:
         asyncio.run(_bootstrap())
     except KeyboardInterrupt:
-        # Ctrl-C before the signal handler is wired (rare).
         pass
 
 
