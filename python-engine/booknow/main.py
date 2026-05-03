@@ -35,6 +35,7 @@ from booknow.binance.balances import BalanceService
 from booknow.binance.rate_limit import get_default as get_rate_limit_guard
 from booknow.binance.user_data import UserDataStreamService
 from booknow.binance.ws_api import WsApiClient
+from booknow.binance.ws_streams import MarketStreamService
 from booknow.config.settings import get_settings
 from booknow.repository.redis_client import close_redis, get_redis
 
@@ -77,7 +78,15 @@ async def _bootstrap() -> None:
     except Exception as e:
         log.warning("  redis ping FAILED: %s — continuing; tasks may fail until Redis is up", e)
 
-    # ── Phase 4: user-data-stream ────────────────────────────────────
+    # ── Phase 5: market data fan-in (always on, public stream) ───────
+    # Subscribes to !ticker_1h@arr and writes CURRENT_PRICE / FAST_MOVE /
+    # WATCH_ALL / per-bucket Percentage hashes into Redis. This is the
+    # foundation everything else (rules, processors, sentiment) reads.
+    market_stream = MarketStreamService(redis_client=redis)
+    await market_stream.start()
+    log.info("  market-stream task started")
+
+    # ── Phase 4: user-data-stream (live mode only) ───────────────────
     user_data: UserDataStreamService | None = None
     if settings.live_mode:
         if not (settings.binance_api_key and settings.binance_secret_key):
@@ -115,6 +124,10 @@ async def _bootstrap() -> None:
         await stop.wait()
     finally:
         log.info("BookNow Python engine stopping…")
+        try:
+            await market_stream.stop()
+        except Exception as e:
+            log.warning("  market-stream stop error: %s", e)
         if user_data is not None:
             try:
                 await user_data.stop()
