@@ -128,11 +128,18 @@ public class TradeExecutor {
             return;
         }
 
-        // ── Buy-gate: analyse 2-month history before placing any order ──────────
-        double currentPriceDouble = currentPrice.getPrice().doubleValue();
-        if (!coinAnalyzer.shouldBuy(symbol, currentPriceDouble)) {
-            log.info("[{}] Skip buy {} — analysis gate rejected (score < 4)", ruleLabel, symbol);
-            return;
+        // ── Buy-gate: 2-month history check ──────────────────────────────────
+        // Skipped in fast-scalp mode: a 250-candle daily REST fetch and
+        // multi-factor scoring are pure latency for a +$0.20 scalp where the
+        // signal is already a fast-move pattern from live ticks.
+        if (!configService.isFastScalpMode()) {
+            double currentPriceDouble = currentPrice.getPrice().doubleValue();
+            if (!coinAnalyzer.shouldBuy(symbol, currentPriceDouble)) {
+                log.info("[{}] Skip buy {} — analysis gate rejected (score < 4)", ruleLabel, symbol);
+                return;
+            }
+        } else {
+            log.debug("[{}] Fast-scalp mode: skipping CoinAnalyzer gate for {}", ruleLabel, symbol);
         }
 
         try {
@@ -148,16 +155,20 @@ public class TradeExecutor {
             buy.setBuyPrice(buyPrice);
             buy.setSelP(sellPct);
             buy.setHms(getHMS());
+            buy.setBuyTimeStamp(Timestamp.from(Instant.now()));
             buy.setOrderId(orderResponse.getOrderId());
             buy.setExecutedQty(orderResponse.getExecutedQty());
             buy.setOrigQty(orderResponse.getOrigQty());
 
             repository.saveBuy(BUY_KEY, symbol, buy);
-            tradeState.markBought(symbol, ruleLabel);
+            tradeState.markBought(symbol, ruleLabel, buyPrice);
             tslService.startTracking(symbol, buyPrice);
 
             if (liveMode) {
-                placeLimitSell(orderResponse, buyPrice, sellPct);
+                Long sellOrderId = placeLimitSell(orderResponse, buyPrice, sellPct);
+                if (sellOrderId != null) {
+                    tradeState.recordOpenSellOrder(symbol, sellOrderId);
+                }
             }
 
             String message = String.format("%s BUY %s @ %s (target +%.1f%%)", ruleLabel, symbol, buyPrice, sellPct);
@@ -166,6 +177,88 @@ public class TradeExecutor {
 
         } catch (Exception e) {
             log.error("[{}] Error executing buy for {}: {}", ruleLabel, symbol, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Force a market exit on a position regardless of the open GTC limit-sell.
+     * Called by PositionMonitor when:
+     *   - TSL fires (price dropped X% from peak), or
+     *   - max-hold timer expired (we've been bag-holding too long).
+     *
+     * Cancels the open limit-sell first (best-effort), then places a MARKET
+     * SELL so we exit immediately — no waiting on an order that may never fill.
+     */
+    public void forceMarketExit(String symbol, CurrentPrice currentPrice, String reason) {
+        if (!tradeState.isAlreadyBought(symbol)) {
+            log.debug("[ForceExit:{}] Skip {} — not in position", reason, symbol);
+            return;
+        }
+
+        try {
+            // Resolve qty: prefer the open Buy record (it has the actual filled qty).
+            Buy buy = repository.getBuy(BUY_KEY, symbol);
+            String qtyStr;
+            if (buy != null && buy.getExecutedQty() != null && !buy.getExecutedQty().isEmpty()) {
+                qtyStr = filterService.roundQuantity(symbol, new BigDecimal(buy.getExecutedQty())).toPlainString();
+            } else {
+                log.warn("[ForceExit:{}] No buy record for {}, aborting exit", reason, symbol);
+                return;
+            }
+
+            // Step 1: cancel the open GTC limit-sell so qty is free for the market sell.
+            tradeState.getPosition(symbol).ifPresent(p -> {
+                if (p.openSellOrderId != null) {
+                    try {
+                        log.info("[ForceExit:{}] Cancelling open limit-sell #{} for {}", reason, p.openSellOrderId, symbol);
+                        prodBinanceApiARestClient.cancelOrder(
+                            new com.bogoai.api.client.domain.account.request.CancelOrderRequest(symbol, p.openSellOrderId));
+                    } catch (BinanceApiException e) {
+                        // -2011 = "Unknown order sent" — order already filled or already cancelled.
+                        // Either way it's fine to proceed with the market sell attempt; if the
+                        // qty has already left the wallet, the market sell will fail cleanly.
+                        log.warn("[ForceExit:{}] Cancel-order failed for {} #{} (likely already filled): {}",
+                            reason, symbol, p.openSellOrderId, e.getMessage());
+                    }
+                }
+            });
+
+            BigDecimal sellPrice = currentPrice.getPrice();
+
+            if (liveMode) {
+                log.info("[ForceExit:{}] LIVE marketSell {} qty={} @ ~{}", reason, symbol, qtyStr, sellPrice);
+                NewOrderResponse resp = prodBinanceApiARestClient.newOrder(marketSell(symbol, qtyStr));
+                if (resp != null && resp.getPrice() != null) {
+                    try {
+                        BigDecimal filledPx = new BigDecimal(resp.getPrice());
+                        if (filledPx.signum() > 0) sellPrice = filledPx;
+                    } catch (NumberFormatException ignored) { }
+                }
+                binanceDustService.sweepToBnb(symbol.replace("USDT", ""));
+            } else {
+                log.info("[ForceExit:{}] PAPER marketSell {} qty={} @ ~{}", reason, symbol, qtyStr, sellPrice);
+            }
+
+            // Persist the sell record + clean up bot state.
+            Sell sell = new Sell();
+            sell.setSellingPoint(sellPrice.toPlainString());
+            sell.setStatus("Y");
+            sell.setTimestamp(Timestamp.from(Instant.now()));
+            sell.setSellMaxPercentage(currentPrice.getPercentage());
+            sell.setSellAveragePercentage(currentPrice.getPercentage());
+            sell.setSellLeastPercentage(currentPrice.getPercentage());
+
+            repository.saveSell(SELL_KEY, symbol, sell);
+            repository.deleteBuy(BUY_KEY, symbol);
+            tradeState.markSold(symbol);
+            tslService.reset(symbol);
+
+            String message = String.format("FORCE-EXIT[%s] %s @ %s", reason, symbol, sellPrice);
+            log.info(message);
+            BookNowUtility.runNotification(message);
+
+        } catch (Exception e) {
+            log.error("[ForceExit:{}] Failed for {}: {}", reason, symbol, e.getMessage(), e);
         }
     }
 
@@ -363,7 +456,7 @@ public class TradeExecutor {
      *
      * Always uses TimeInForce.GTC so the order stays open until filled or cancelled.
      */
-    private void placeLimitSell(NewOrderResponse buyResponse, BigDecimal buyPrice, double sellPct) {
+    private Long placeLimitSell(NewOrderResponse buyResponse, BigDecimal buyPrice, double sellPct) {
         try {
             String symbol = buyResponse.getSymbol();
             BigDecimal qtyBD = new BigDecimal(buyResponse.getExecutedQty());
@@ -386,7 +479,7 @@ public class TradeExecutor {
                 sellPriceBD = buyPrice.multiply(sellMult);
                 log.info("[PctMode] Target profit: {}%. Calculated sellPrice: {}", sellPct, sellPriceBD);
             }
-            
+
             // DYNAMIC SCALING
             sellPriceBD = filterService.roundPrice(symbol, sellPriceBD);
             String sellPriceStr = sellPriceBD.toPlainString();
@@ -398,10 +491,12 @@ public class TradeExecutor {
             NewOrderResponse sellResponse = prodBinanceApiARestClient.newOrder(
                 limitSell(buyResponse.getSymbol(), GTC, qty, sellPriceStr)
             );
-            log.info("[Binance API RESPONSE] newOrder | symbol={} orderId={} status={} price={} origQty={} executedQty={}", 
+            log.info("[Binance API RESPONSE] newOrder | symbol={} orderId={} status={} price={} origQty={} executedQty={}",
                 sellResponse.getSymbol(), sellResponse.getOrderId(), sellResponse.getStatus(), sellResponse.getPrice(), sellResponse.getOrigQty(), sellResponse.getExecutedQty());
+            return sellResponse.getOrderId();
         } catch (Exception e) {
             log.error("Failed to place limit-sell for {}: {}", buyResponse.getSymbol(), e.getMessage(), e);
+            return null;
         }
     }
 
@@ -581,7 +676,7 @@ public class TradeExecutor {
         buy.setBuyTimeStamp(Timestamp.from(Instant.now()));
         
         repository.saveBuy(BUY_KEY, symbol, buy);
-        tradeState.markBought(symbol, "MANUAL");
+        tradeState.markBought(symbol, "MANUAL", price);
         tslService.startTracking(symbol, price);
     }
 

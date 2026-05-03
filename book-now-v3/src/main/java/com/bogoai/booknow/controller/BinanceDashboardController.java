@@ -29,13 +29,31 @@ public class BinanceDashboardController {
     @Autowired
     private BinanceApiRestClient prodBinanceApiARestClient;
 
+    // Cache for dashboard polling to prevent rate limits
+    private final java.util.concurrent.ConcurrentMap<String, CachedData> dashboardCache = 
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static class CachedData {
+        Object data;
+        long timestamp;
+        CachedData(Object d) { this.data = d; this.timestamp = System.currentTimeMillis(); }
+        boolean isExpired() { return (System.currentTimeMillis() - this.timestamp) > 10000; } // 10s TTL
+    }
+
     /**
      * Fetch Account Information (GET /api/v3/account)
      */
     @GetMapping("/account")
     public ResponseEntity<?> getAccount() {
+        String cacheKey = "account";
+        CachedData cached = dashboardCache.get(cacheKey);
+        if (cached != null && !cached.isExpired()) {
+            return ResponseEntity.ok(cached.data);
+        }
+
         try {
             Account account = prodBinanceApiARestClient.getAccount();
+            dashboardCache.put(cacheKey, new CachedData(account));
             return ResponseEntity.ok(account);
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Failed to fetch account info: " + e.getMessage());
@@ -47,8 +65,15 @@ public class BinanceDashboardController {
      */
     @GetMapping("/open-orders")
     public ResponseEntity<?> getOpenOrders(@RequestParam(required = false) String symbol) {
+        String cacheKey = "open-orders-" + (symbol != null ? symbol : "all");
+        CachedData cached = dashboardCache.get(cacheKey);
+        if (cached != null && !cached.isExpired()) {
+            return ResponseEntity.ok(cached.data);
+        }
+
         try {
             List<Order> openOrders = prodBinanceApiARestClient.getOpenOrders(new OrderRequest(symbol));
+            dashboardCache.put(cacheKey, new CachedData(openOrders));
             return ResponseEntity.ok(openOrders);
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Failed to fetch open orders: " + e.getMessage());

@@ -6,12 +6,18 @@ import logging
 import statistics
 import numpy as np
 from datetime import datetime
+import sys
+import os
+
+# Add parent directory to path for config imports
+sys.path.insert(0, os.path.dirname(__file__))
+from symbols_config import ACTIVE_SYMBOLS
 
 # ==========================================
 # 1. LOGGING & CONFIG
 # ==========================================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("AdaptiveSentiment")
+logger = logging.getLogger("MarketScanner")
 
 class AdaptiveMarketEngine:
     def __init__(self, symbol="BTC/USDT"):
@@ -186,28 +192,21 @@ class AdaptiveMarketEngine:
 
 if __name__ == "__main__":
     engine = AdaptiveMarketEngine()
-    logger.info("🚀 Starting All-Market Behavioral Scan...")
+    logger.info(f"🚀 Starting Market Scanner for top {len(ACTIVE_SYMBOLS)} symbols...")
     
     try:
-        # Load all markets and filter for active USDT spot pairs
-        markets = engine.exchange.load_markets()
-        all_symbols = [
-            s for s, m in markets.items() 
-            if m['active'] and m['quote'] == 'USDT' and m['type'] == 'spot'
-        ]
-        logger.info(f"📊 Discovered {len(all_symbols)} active USDT pairs. Starting analysis...")
-
         while True:
-            for s in all_symbols:
+            for s in ACTIVE_SYMBOLS:
                 try:
-                    engine.symbol = s
+                    engine.symbol = s.replace("/", "")
                     engine.run_adaptive_analysis()
-                    time.sleep(1) # Gentle spacing to respect rate limits
+                    # Sleep 2.5s between symbols to stay within rate limits (13 requests * 24 symbols/min < 1200 weight)
+                    time.sleep(2.5) 
                 except Exception:
                     continue
             
-            logger.info("✅ Full market cycle complete. Cooling down for 30s...")
-            time.sleep(30)
+            logger.info("✅ Full market cycle complete. Waiting 60s...")
+            time.sleep(60)
             
     except KeyboardInterrupt:
-        logger.info("🛑 Scanner stopped by user.")
+        logger.info("🛑 Scanner stopped.")

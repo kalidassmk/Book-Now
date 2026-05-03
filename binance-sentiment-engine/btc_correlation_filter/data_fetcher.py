@@ -19,15 +19,19 @@ class DataFetcher:
     async def fetch_pair(self, symbol, interval="15m", limit=100):
         """
         Fetches both the target symbol and BTC in parallel.
+        (Deprecated efficiency-wise, use fetch_single + cached BTC instead)
         """
         tasks = [
-            self._fetch_klines(symbol, interval, limit),
-            self._fetch_klines("BTCUSDT", interval, limit)
+            self.fetch_single(symbol, interval, limit),
+            self.fetch_single("BTCUSDT", interval, limit)
         ]
         results = await asyncio.gather(*tasks)
         return results[0], results[1]
 
-    async def _fetch_klines(self, symbol, interval, limit):
+    async def fetch_single(self, symbol, interval="15m", limit=100):
+        """
+        Fetches kline data for a single symbol.
+        """
         try:
             ccxt_symbol = symbol if "/" in symbol else f"{symbol[:-4]}/{symbol[-4:]}"
             return await self.client.fetch_ohlcv(ccxt_symbol, timeframe=interval, limit=limit)

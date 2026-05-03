@@ -179,10 +179,11 @@ class Profit020TrendAnalyzer:
                         log.error(f"Error processing {symbol}: {e}")
                         continue
 
-                time.sleep(5)
+                # Sleep 15s to respect rate limits (fetch_tickers is heavy)
+                time.sleep(15)
             except Exception as e:
                 log.error(f"Main Loop Error: {e}")
-                time.sleep(10)
+                time.sleep(15)
 
 if __name__ == "__main__":
     analyzer = Profit020TrendAnalyzer()

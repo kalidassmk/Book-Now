@@ -34,9 +34,15 @@ public class BinanceBalanceService {
     }
 
     /**
-     * Refresh balances every 15 seconds.
+     * Reconciliation safety net.
+     *
+     * Real-time balance updates are pushed by {@link BinanceUserDataStreamService}
+     * over the user-data-stream websocket, so this REST poll only needs to
+     * exist as a guard against missed events (e.g. websocket reconnects, bot
+     * restart before the first push lands). Cadence dropped from 15s to 5
+     * minutes — that's ~5,760 → 288 calls/day for this loop alone.
      */
-    @Scheduled(fixedRate = 15000)
+    @Scheduled(fixedRate = 300_000)
     public void refreshBalances() {
         try {
             log.info("[BalanceService] Refreshing account balances from Binance...");

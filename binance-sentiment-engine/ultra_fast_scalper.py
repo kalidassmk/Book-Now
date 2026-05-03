@@ -349,12 +349,12 @@ class MultiSymbolScalper:
                     continue
 
                 # Process in small batches to avoid Binance Rate Limits
-                batch_size = 10
+                batch_size = 5
                 for i in range(0, len(self.symbols), batch_size):
                     batch = self.symbols[i : i + batch_size]
                     tasks = [self.process_symbol(s, btc_df) for s in batch]
                     await asyncio.gather(*tasks)
-                    await asyncio.sleep(0.5) # Gentle spacing
+                    await asyncio.sleep(1.0) # Gentle spacing
 
             except Exception as e:
                 log.error(f"🔥 Engine Error: {e}")

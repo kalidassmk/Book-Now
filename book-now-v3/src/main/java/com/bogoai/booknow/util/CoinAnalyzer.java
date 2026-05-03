@@ -38,6 +38,16 @@ import java.util.List;
 public class CoinAnalyzer {
 
     private static final Logger log = LoggerFactory.getLogger(CoinAnalyzer.class);
+    
+    // Cache to prevent redundant heavy API calls for the same symbol
+    private final java.util.concurrent.ConcurrentMap<String, CachedResult> analysisCache = 
+        new java.util.concurrent.ConcurrentHashMap<>();
+    
+    private static class CachedResult {
+        CoinAnalysisResult result;
+        long timestamp;
+        CachedResult(CoinAnalysisResult r) { this.result = r; this.timestamp = System.currentTimeMillis(); }
+    }
 
     /** Number of daily candles to fetch (≈2 calendar months) */
     /** Number of daily candles to fetch (to support 200-EMA) */
@@ -59,11 +69,23 @@ public class CoinAnalyzer {
      * @param currentPrice live price (from Redis)
      */
     public CoinAnalysisResult analyze(String symbol, double currentPrice) {
+        // 1. Check Cache (1-hour TTL for daily candle analysis)
+        CachedResult cached = analysisCache.get(symbol);
+        if (cached != null && (System.currentTimeMillis() - cached.timestamp) < 3600000) {
+            CoinAnalysisResult r = cached.result;
+            // Update live price even on cached results
+            r.setCurrentPrice(currentPrice);
+            return r;
+        }
+
         CoinAnalysisResult result = new CoinAnalysisResult();
         result.setSymbol(symbol);
         result.setCurrentPrice(currentPrice);
 
         try {
+            // Pacing: Add a small delay to prevent rapid-fire requests across multiple threads
+            Thread.sleep(500);
+            
             log.info("[Binance API] Requesting the last {} daily candlesticks from Binance for {} to perform trend and volume analysis.", CANDLE_LIMIT, symbol);
             List<Candlestick> candles = prodBinanceApiARestClient
                     .getCandlestickBars(symbol, CandlestickInterval.DAILY, CANDLE_LIMIT, null, null);
@@ -256,6 +278,9 @@ public class CoinAnalyzer {
 
             log.info("[Analyzer] {} score={}/7 → {} | {}", symbol, score,
                     result.getRecommendation(), result.getReason());
+
+            // Cache the result before returning
+            analysisCache.put(symbol, new CachedResult(result));
 
         } catch (Exception e) {
             log.error("[Analyzer] Error analysing {}: {}", symbol, e.getMessage());

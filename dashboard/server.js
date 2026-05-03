@@ -223,12 +223,11 @@ function currentPriceOf(sym, priceHash) {
  */
 async function refreshAnalysisMetrics(symbol) {
     try {
-        const [klinesRes, tickerRes] = await Promise.all([
-            fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=60`),
-            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`),
-        ]);
+        // 60-day daily klines stay on REST — there's no historical kline WS.
+        // 24h ticker comes from the binance-worker !miniTicker@arr cache, so
+        // this function now does ONE REST call instead of two.
+        const klinesRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=60`);
         const klines = await klinesRes.json();
-        const ticker = await tickerRes.json();
 
         if (!Array.isArray(klines) || klines.length < 14) return null;
 
@@ -237,7 +236,13 @@ async function refreshAnalysisMetrics(symbol) {
         const lows      = klines.map(k => parseFloat(k[3]));
         const quoteVols = klines.map(k => parseFloat(k[7]));
 
-        const vol24h = tickerRes.ok ? parseFloat(ticker.quoteVolume || 0) : 0;
+        // Prefer the live mini-ticker cache; on a cold start (first ~1s) it
+        // may be empty, in which case fall back to the most recent daily
+        // candle's quote volume — close enough for the score and zero REST.
+        const cachedTicker = binanceWorker.getTicker24h ? binanceWorker.getTicker24h(symbol) : null;
+        const vol24h = cachedTicker
+            ? parseFloat(cachedTicker.quoteVolume || 0)
+            : (quoteVols[quoteVols.length - 1] || 0);
 
         const metrics = {
             high2m:    Math.max(...highs),
@@ -472,7 +477,11 @@ async function tick() {
             // Analysis scoring
             let metrics = analysisCache.get(symbol);
             if (!metrics || (Date.now() - metrics.lastUpdated > CACHE_TTL)) {
-                refreshAnalysisMetrics(symbol).catch(() => {});
+                // Stagger initial fetches to avoid startup bursts
+                const delay = metrics ? 0 : Math.floor(Math.random() * 5000); 
+                setTimeout(() => {
+                    refreshAnalysisMetrics(symbol).catch(() => {});
+                }, delay);
             }
             const { score: aScore, rec } = calculateScore(symbol, price, metrics);
 
@@ -1255,12 +1264,11 @@ app.get('/api/analyze/:symbol', async (req, res) => {
 
     // ── Fallback: call public Binance API directly ───────────────────────────
     try {
-        const [klinesRes, tickerRes] = await Promise.all([
-            fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=60`),
-            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`),
-        ]);
+        // Daily klines stay on REST (no historical WS equivalent). The 24h
+        // ticker is read from the in-process mini-ticker cache populated by
+        // binance-worker.js — one less REST call per fallback path.
+        const klinesRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&limit=60`);
         const klines = await klinesRes.json();
-        const ticker = await tickerRes.json();
 
         if (!Array.isArray(klines) || klines.length < 14) {
             return res.json({ ok: false, error: 'Not enough candle data from Binance' });
@@ -1285,11 +1293,18 @@ app.get('/api/analyze/:symbol', async (req, res) => {
         const trend7d  = avgClose(n-14, n-7) ? ((avgClose(n-7, n) - avgClose(n-14, n-7)) / avgClose(n-14, n-7) * 100) : 0;
         const trend30d = avgClose(n-60, n-30) ? ((avgClose(n-30, n) - avgClose(n-60, n-30)) / avgClose(n-60, n-30) * 100) : 0;
 
-        const vol24h     = parseFloat(ticker.quoteVolume || 0);
+        // 24h stats from the WS mini-ticker cache; cold-start fallback is
+        // the latest daily candle's close + quote volume.
+        const cachedTicker = binanceWorker.getTicker24h ? binanceWorker.getTicker24h(symbol) : null;
+        const vol24h     = cachedTicker
+            ? parseFloat(cachedTicker.quoteVolume || 0)
+            : (quoteVols[n - 1] || 0);
         const vol30dAvg  = quoteVols.slice(-30).reduce((a, b) => a + b, 0) / 30;
         const vol7dAvg   = quoteVols.slice(-7).reduce((a, b) => a + b, 0) / 7;
         const volRatio   = vol30dAvg > 0 ? vol24h / vol30dAvg : 1;
-        const currentPrice = parseFloat(ticker.lastPrice || 0);
+        const currentPrice = cachedTicker
+            ? parseFloat(cachedTicker.lastPrice || 0)
+            : (closes[n - 1] || 0);
         const pricePos   = (high2m - low2m) > 0 ? ((currentPrice - low2m) / (high2m - low2m) * 100) : 50;
 
         // Scoring (0–7)

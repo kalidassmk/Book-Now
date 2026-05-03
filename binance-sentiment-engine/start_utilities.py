@@ -28,7 +28,12 @@ SETUP_TASKS = [
 UTILITIES = [
     ("Symbol Sync",        ".", "sync_symbols.py",                      3600), # Every 1h
     ("Market Scanner",     ".", "market_sentiment_engine.py",           0),    # Persistent
-    ("Fast Move Analyzer", ".", "volume_price_analyzer.py --scan",      600),  # Every 10m
+    # Long-running WebSocket-backed kline cache + 10-min internal scan loop.
+    # Replaces the previous "spawn `--scan` every 600s" subprocess pattern,
+    # which made up to ~160 REST kline fetches per scan (~23k/day). The
+    # daemon now keeps a persistent multiplexed WS connection and reads the
+    # buffer; ~99% of those REST calls disappear.
+    ("Fast Move Analyzer", ".", "volume_price_analyzer.py --daemon",     0),    # Persistent
     ("Fast Scalper",       ".", "ultra_fast_scalper.py",                0),    # Persistent
     ("Profit Analyzer",     ".", "profit_reached_analyzer.py",           0),    # Persistent
     ("Pattern Recorder",    ".", "success_pattern_recorder.py",          0),    # Persistent

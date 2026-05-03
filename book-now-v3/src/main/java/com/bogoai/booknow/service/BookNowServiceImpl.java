@@ -12,6 +12,8 @@ import com.bogoai.booknow.rules.RuleOne;
 import com.bogoai.booknow.rules.RuleThree;
 import com.bogoai.booknow.rules.RuleTwo;
 import com.bogoai.booknow.util.TradeExecutor;
+import com.bogoai.booknow.util.TradeState;
+import com.bogoai.booknow.util.TradingConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,6 +42,8 @@ public class BookNowServiceImpl implements BookNowService {
     @Autowired private BinanceApiRestClient   prodBinanceApiARestClient;
     @Autowired private TradeExecutor          tradeExecutor;
     @Autowired private ConsensusCoordinator   consensusCoordinator;
+    @Autowired private TradingConfigService   configService;
+    @Autowired private TradeState             tradeState;
 
     private ExecutorService    executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -69,10 +73,14 @@ public class BookNowServiceImpl implements BookNowService {
         executor.submit(new TimeAnalyser(repository));
         executor.submit(new FastMoveFilter(repository));
 
-        // ── Trading rules (AI Consensus Enabled) ──────────────────────────────
-        executor.submit(new RuleOne(repository, consensusCoordinator));
-        executor.submit(new RuleTwo(repository, consensusCoordinator));
-        executor.submit(new RuleThree(repository, consensusCoordinator));
+        // ── Trading rules ────────────────────────────────────────────────────
+        // Rules call TradeExecutor.tryBuy() directly when fast-scalp mode is on
+        // (the default), bypassing the multi-agent consensus to keep buy
+        // latency in the sub-second range. ConsensusCoordinator stays wired in
+        // for the legacy path (toggle fastScalpMode=false to re-enable it).
+        executor.submit(new RuleOne(repository, consensusCoordinator, tradeExecutor, configService, tradeState));
+        executor.submit(new RuleTwo(repository, consensusCoordinator, tradeExecutor, configService, tradeState));
+        executor.submit(new RuleThree(repository, consensusCoordinator, tradeExecutor, configService, tradeState));
 
         log.info("=== All 8 workers submitted ===");
         return true;

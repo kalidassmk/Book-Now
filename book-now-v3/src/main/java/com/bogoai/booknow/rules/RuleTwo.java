@@ -6,6 +6,9 @@ import com.bogoai.booknow.model.RTwo;
 import com.bogoai.booknow.model.ShortestTime;
 import com.bogoai.booknow.model.TimeAnalyse;
 import com.bogoai.booknow.repository.BookNowRepository;
+import com.bogoai.booknow.util.TradeExecutor;
+import com.bogoai.booknow.util.TradeState;
+import com.bogoai.booknow.util.TradingConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,14 +44,32 @@ public class RuleTwo implements Runnable {
     private static final double MAX_2T3 =  150.0;
     private static final double MAX_3T5 = 1500.0;
 
-    private final BookNowRepository    repository;
-    private final ConsensusCoordinator consensusCoordinator;
+    private final BookNowRepository      repository;
+    private final ConsensusCoordinator   consensusCoordinator;
+    private final TradeExecutor          tradeExecutor;
+    private final TradingConfigService   configService;
 
     private final Set<String> triggered = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    public RuleTwo(BookNowRepository repository, ConsensusCoordinator consensusCoordinator) {
-        this.repository    = repository;
+    public RuleTwo(BookNowRepository repository,
+                   ConsensusCoordinator consensusCoordinator,
+                   TradeExecutor tradeExecutor,
+                   TradingConfigService configService,
+                   TradeState tradeState) {
+        this.repository           = repository;
         this.consensusCoordinator = consensusCoordinator;
+        this.tradeExecutor        = tradeExecutor;
+        this.configService        = configService;
+        tradeState.addSellListener(triggered::remove);
+    }
+
+    private void fire(String symbol, CurrentPrice cp, double sellPct, String label) {
+        if (cp == null) return;
+        if (configService.isFastScalpMode()) {
+            tradeExecutor.tryBuy(symbol, cp, sellPct, label);
+        } else {
+            consensusCoordinator.coordinate(symbol, cp);
+        }
     }
 
     @Override
@@ -107,7 +128,7 @@ public class RuleTwo implements Runnable {
                 triggered.add(symbol);
                 log.info("{}: {} | 1T2={:.1f}s 2T3={:.1f}s 3T5={:.1f}s",
                     pattern, symbol, t1t2, t2t3, t3t5);
-                consensusCoordinator.coordinate(symbol, prices.get(symbol));
+                fire(symbol, prices.get(symbol), SELL_PCT_RULE_2, pattern);
             }
         }
     }

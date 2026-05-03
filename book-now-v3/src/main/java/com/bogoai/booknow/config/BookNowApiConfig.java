@@ -3,6 +3,7 @@ package com.bogoai.booknow.config;
 import com.bogoai.api.client.BinanceApiAsyncRestClient;
 import com.bogoai.api.client.BinanceApiClientFactory;
 import com.bogoai.api.client.BinanceApiRestClient;
+import com.bogoai.api.client.BinanceApiWebSocketClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -50,5 +51,14 @@ public class BookNowApiConfig {
         return client;
     }
 
-
+    /**
+     * Streaming client used by BinanceUserDataStreamService to subscribe to
+     * the account's user-data-stream (balance + order updates), replacing the
+     * 15s/60s REST polling loops that were burning ~7,200 weight/day.
+     */
+    @Bean
+    public BinanceApiWebSocketClient prodBinanceApiWebSocketClient() {
+        BinanceApiClientFactory factory = BinanceApiClientFactory.newInstance(prodAPIKey, prodSecretKey);
+        return factory.newWebSocketClient();
+    }
 }

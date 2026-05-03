@@ -84,4 +84,16 @@ public class TradingConfigService {
     public double getTslPct() {
         return getConfig().getTslPct();
     }
+
+    public boolean isFastScalpMode() {
+        return getConfig().isFastScalpMode();
+    }
+
+    public int getMaxHoldSeconds() {
+        return getConfig().getMaxHoldSeconds();
+    }
+
+    public boolean isMarketExitOnTimeout() {
+        return getConfig().isMarketExitOnTimeout();
+    }
 }

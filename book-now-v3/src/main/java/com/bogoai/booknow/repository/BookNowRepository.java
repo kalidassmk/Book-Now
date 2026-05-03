@@ -21,6 +21,9 @@ public interface BookNowRepository {
 
     public Map<String, CurrentPrice> getAllCurrentPrice(String key);
 
+    /** Fetch a single symbol's CurrentPrice from the hash without pulling the whole map. */
+    public CurrentPrice getCurrentPrice(String key, String symbol);
+
     public void savePercentage(String key, String symbol, Percentage obj);
 
     public Map<String, Percentage> getAllEntryPercentage(String key);

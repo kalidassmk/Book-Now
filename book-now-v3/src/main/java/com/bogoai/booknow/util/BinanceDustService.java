@@ -39,7 +39,14 @@ public class BinanceDustService {
         detectDust();
     }
 
-    @Scheduled(fixedRate = 60000) // Every minute
+    /**
+     * Dust scanner — formerly polled {@code getAccount()} every 60s
+     * (~1,440 calls/day). The user-data-stream now pushes balance changes,
+     * so this only runs every 5 minutes as a safety net for missed events.
+     * For dust to materialise we need a balance change anyway, and those
+     * arrive over the stream.
+     */
+    @Scheduled(fixedRate = 300_000)
     public void detectDust() {
         try {
             log.info("[DustService] Scanning for dust balances...");

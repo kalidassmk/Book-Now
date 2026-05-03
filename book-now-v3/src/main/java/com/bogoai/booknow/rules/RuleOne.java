@@ -6,6 +6,9 @@ import com.bogoai.booknow.model.ROne;
 import com.bogoai.booknow.model.ShortestTime;
 import com.bogoai.booknow.model.TimeAnalyse;
 import com.bogoai.booknow.repository.BookNowRepository;
+import com.bogoai.booknow.util.TradeExecutor;
+import com.bogoai.booknow.util.TradeState;
+import com.bogoai.booknow.util.TradingConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,16 +44,43 @@ public class RuleOne implements Runnable {
     private static final double MAX_2T3_ULTRA  =  20.0;
     private static final double MAX_2T3_FULL   = 180.0;
 
-    private final BookNowRepository    repository;
-    private final ConsensusCoordinator consensusCoordinator;
+    private final BookNowRepository      repository;
+    private final ConsensusCoordinator   consensusCoordinator;
+    private final TradeExecutor          tradeExecutor;
+    private final TradingConfigService   configService;
 
-    /** Guards so each symbol triggers at most one buy per session. */
+    /**
+     * Per-symbol guard so a single ladder pattern doesn't fire repeatedly
+     * while the symbol is in flight. Cleared on sell via TradeState's
+     * sell-listener so the same coin can be scalped again on the next pattern.
+     */
     private final Set<String> triggered = java.util.Collections.newSetFromMap(
         new java.util.concurrent.ConcurrentHashMap<>());
 
-    public RuleOne(BookNowRepository repository, ConsensusCoordinator consensusCoordinator) {
-        this.repository    = repository;
+    public RuleOne(BookNowRepository repository,
+                   ConsensusCoordinator consensusCoordinator,
+                   TradeExecutor tradeExecutor,
+                   TradingConfigService configService,
+                   TradeState tradeState) {
+        this.repository           = repository;
         this.consensusCoordinator = consensusCoordinator;
+        this.tradeExecutor        = tradeExecutor;
+        this.configService        = configService;
+        tradeState.addSellListener(triggered::remove);
+    }
+
+    /**
+     * Route a confirmed pattern to the buy path.
+     * Fast-scalp mode bypasses the multi-agent consensus and goes direct to
+     * TradeExecutor — for a +$0.20 scalp, every second saved counts.
+     */
+    private void fire(String symbol, CurrentPrice cp, double sellPct, String label) {
+        if (cp == null) return;
+        if (configService.isFastScalpMode()) {
+            tradeExecutor.tryBuy(symbol, cp, sellPct, label);
+        } else {
+            consensusCoordinator.coordinate(symbol, cp);
+        }
     }
 
     @Override
@@ -102,7 +132,7 @@ public class RuleOne implements Runnable {
                 triggered.add(symbol);
                 log.info("R1-FULL: {} | 0T1={:.1f}s 1T2={:.1f}s 2T3={:.1f}s",
                     symbol, t0t1, t1t2, t2t3);
-                consensusCoordinator.coordinate(symbol, prices.get(symbol));
+                fire(symbol, prices.get(symbol), SELL_PCT_RULE_1_FULL, "R1-FULL");
             }
         }
 
@@ -120,7 +150,7 @@ public class RuleOne implements Runnable {
                 repository.saveRules(RULE_1, symbol, rOne);
                 triggered.add(symbol);
                 log.info("R1-ULTRA: {} | 0T1={:.1f}s 2T3={:.1f}s", symbol, t0t1, t2t3);
-                consensusCoordinator.coordinate(symbol, prices.get(symbol));
+                fire(symbol, prices.get(symbol), SELL_PCT_RULE_1_FAST, "R1-ULTRA");
             }
         }
     }

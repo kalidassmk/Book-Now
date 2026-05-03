@@ -1,12 +1,5 @@
-/**
- * dashboard/binance-worker.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Pure WebSocket-API v3 Worker (No ListenKey Logic).
- */
-
-const crypto = require('crypto');
+const WebSocket = require('ws');
 const Redis = require('ioredis');
-const WebSocket = require('ws'); 
 require('dotenv').config();
 
 let API_KEY = process.env.BINANCE_API_KEY;
@@ -18,144 +11,247 @@ const redis = new Redis({
     port: process.env.REDIS_PORT || 6379
 });
 
-let wsApiSocket = null;
-let io = null; 
+let listenKey = null;
+let ws = null;
+let io = null;
 let executionCallback = null;
-let reconnectTimer = null;
+let keepAliveTimer = null;
 
-/**
- * PRODUCTION-GRADE: Credential Loader
- */
+// 24-hour ticker cache, populated by the !miniTicker@arr WebSocket stream.
+// Replaces per-symbol REST calls to /api/v3/ticker/24hr (which were paid per
+// symbol and capped by Binance's IP weight limit). The mini-ticker stream
+// arrives once per second with every spot pair's close/volume — so reads
+// from this map are O(1) and free.
+//
+// Shape matches the REST 24h-ticker response so existing call sites can
+// drop in without reshaping their parsing logic:
+//   { lastPrice, quoteVolume, openPrice, highPrice, lowPrice, volume, ts }
+const tickerCache = new Map();
+let tickerWs = null;
+let tickerReconnectTimer = null;
+
 async function loadCredentials() {
-    try {
-        const rApiKey = await redis.get('BINANCE_API_KEY');
-        const rSecretKey = await redis.get('BINANCE_SECRET_KEY');
-        if (rApiKey && rSecretKey) {
-            API_KEY = rApiKey;
-            SECRET_KEY = rSecretKey;
-        }
-    } catch (e) {}
-}
-
-/**
- * PURE WS-API: Handle LifeCycle and Events
- */
-function connectWsApi() {
-    if (wsApiSocket) {
-        try { wsApiSocket.terminate(); } catch (e) {}
+    const rApiKey = await redis.get('BINANCE_API_KEY');
+    const rSecretKey = await redis.get('BINANCE_SECRET_KEY');
+    
+    API_KEY = rApiKey || process.env.BINANCE_API_KEY;
+    SECRET_KEY = rSecretKey || process.env.BINANCE_SECRET_KEY;
+    
+    if (!API_KEY || !SECRET_KEY) {
+        console.warn('⚠️ API Keys are missing! Check your .env file.');
     }
-
-    console.log('[WS-API] Connecting to wss://ws-api.binance.com/ws-api/v3...');
-    wsApiSocket = new WebSocket('wss://ws-api.binance.com/ws-api/v3');
-
-    wsApiSocket.on('open', () => {
-        console.log('[WS-API] Socket Open. Logging on...');
-        // 1. Session Logon
-        wsApiSocket.send(JSON.stringify({
-            id: "logon",
-            method: "session.logon",
-            params: { apiKey: API_KEY }
-        }));
-    });
-
-    wsApiSocket.on('message', (data) => {
-        try {
-            const res = JSON.parse(data);
-            
-            // Handle Responses
-            if (res.id === "logon") {
-                console.log('[WS-API] Session Authenticated ✅');
-                // 2. Start User Data Stream (Directly over this socket)
-                wsApiSocket.send(JSON.stringify({
-                    id: "start_stream",
-                    method: "userDataStream.start"
-                }));
-            } else if (res.id === "start_stream") {
-                console.log('[WS-API] User Data Stream Started 🚀');
-            }
-
-            // Handle Push Events (executionReport, etc)
-            if (res.e === 'executionReport') {
-                const executionData = { symbol: res.s, orderId: res.i, status: res.X, executedQty: res.z, price: res.p };
-                console.log(`[WS-API] Execution: ${res.s} | ${res.X}`);
-                if (io) io.emit('order-execution', executionData);
-                if (executionCallback) executionCallback(executionData);
-                refreshOpenOrders();
-            } else if (res.e === 'outboundAccountPosition') {
-                console.log('[WS-API] Balance Update');
-                refreshAccountBalances();
-            }
-
-        } catch (err) {
-            console.error('[WS-API] Message Error:', err.message);
-        }
-    });
-
-    wsApiSocket.on('close', () => {
-        console.warn('[WS-API] Connection Closed. Reconnecting in 5s...');
-        clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connectWsApi, 5000);
-    });
-
-    wsApiSocket.on('error', (err) => {
-        console.error('[WS-API] Error:', err.message);
-    });
 }
 
-/**
- * Standard Signed API Caller (For Orders/Balances)
- */
-function getSignature(queryString) {
-    return crypto.createHmac('sha256', SECRET_KEY).update(queryString).digest('hex');
-}
-
-async function binanceFetch(endpoint, method = 'GET', params = {}) {
-    const timestamp = Date.now();
-    const query = new URLSearchParams({ ...params, timestamp, recvWindow: 60000 }).toString();
-    const signature = getSignature(query);
-    const url = `${BASE_URL}${endpoint}?${query}&signature=${signature}`;
-
+// 🔹 Step 1: Create Listen Key
+async function createListenKey() {
     try {
-        const res = await fetch(url, {
-            method,
+        console.log('🔑 Requesting UserDataStream ListenKey...');
+        const response = await fetch(`${BASE_URL}/api/v3/userDataStream`, {
+            method: 'POST',
             headers: { 'X-MBX-APIKEY': API_KEY }
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.msg || 'Binance API Error');
-        return data;
+        
+        const rawText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (e) {
+            console.error('❌ Failed to parse Binance response as JSON. Raw response:', rawText.substring(0, 500));
+            throw new Error(`Invalid JSON response (Status: ${response.status})`);
+        }
+        
+        if (!response.ok) throw new Error(data.msg || `Failed to create ListenKey (Status: ${response.status})`);
+        
+        listenKey = data.listenKey;
+        console.log('✅ UserDataStream ListenKey created:', listenKey);
+        return listenKey;
     } catch (err) {
-        console.error(`[Binance Network Error] ${endpoint}:`, err.message);
+        console.error('❌ Failed to create ListenKey:', err.message);
+        if (err.message.includes('418')) {
+            console.error('🚫 IP Banned (418). Cooling down for 60s before retry...');
+            setTimeout(createListenKey, 60000);
+        }
         return null;
     }
 }
 
-async function refreshOpenOrders() {
-    const orders = await binanceFetch('/api/v3/openOrders');
-    if (orders) {
-        await redis.set('BINANCE:OPEN_ORDERS:ALL', JSON.stringify(orders));
+// 🔹 Step 2: Keep Alive (every 25 mins)
+async function keepAlive() {
+    if (!listenKey) return;
+    try {
+        const url = `${BASE_URL}/api/v3/userDataStream?listenKey=${listenKey}`;
+        const response = await fetch(url, {
+            method: 'PUT',
+            headers: { 'X-MBX-APIKEY': API_KEY }
+        });
+        
+        if (response.ok) {
+            console.log('🔄 UserDataStream ListenKey refreshed');
+        } else {
+            const data = await response.json();
+            throw new Error(data.msg || 'KeepAlive failed');
+        }
+    } catch (err) {
+        console.error('⚠️ KeepAlive Error:', err.message);
+        // If expired (404), try to recreate
+        if (err.message.includes('not found') || err.message.includes('404')) {
+            console.log('🔄 ListenKey expired, recreating...');
+            const key = await createListenKey();
+            if (key) connectWS();
+        }
     }
 }
 
-async function refreshAccountBalances() {
-    const accountInfo = await binanceFetch('/api/v3/account');
-    if (!accountInfo || !accountInfo.balances) return;
-    const balances = accountInfo.balances.filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
-    await redis.set('BINANCE:BALANCES:ALL', JSON.stringify(balances));
+// 🔹 Step 3: Connect WebSocket
+function connectWS() {
+    if (!listenKey) return;
+    if (ws) {
+        try { ws.terminate(); } catch (e) {}
+    }
+
+    console.log(`[WS] Connecting to User Data Stream: wss://stream.binance.com:9443/ws/${listenKey}`);
+    ws = new WebSocket(`wss://stream.binance.com:9443/ws/${listenKey}`);
+
+    ws.on('open', () => {
+        console.log('🟢 User Data Stream Connected');
+    });
+
+    ws.on('message', async (data) => {
+        try {
+            const msg = JSON.parse(data);
+
+            // 🔥 Handle Order Execution Updates
+            if (msg.e === 'executionReport') {
+                const executionData = { 
+                    symbol: msg.s, 
+                    orderId: msg.i, 
+                    status: msg.X, 
+                    executedQty: msg.z, 
+                    price: msg.p 
+                };
+                console.log(`📈 Order Update: ${msg.s} | ${msg.X} | Qty: ${msg.z}`);
+                
+                await redis.set('BINANCE:LAST_ORDER_UPDATE', JSON.stringify(msg));
+                if (io) io.emit('order-execution', executionData);
+                if (executionCallback) executionCallback(executionData);
+            }
+
+            // 🔥 Handle Balance Updates
+            if (msg.e === 'outboundAccountPosition' || msg.e === 'balanceUpdate') {
+                console.log('💰 Balance Update Received');
+                const balances = msg.B.map(b => ({
+                    asset: b.a,
+                    free: b.f,
+                    locked: b.l
+                })).filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
+                
+                await redis.set('BINANCE:BALANCES:ALL', JSON.stringify(balances));
+                if (io) io.emit('balance-update', balances);
+            }
+
+        } catch (err) {
+            console.error('[WS] Message Error:', err.message);
+        }
+    });
+
+    ws.on('close', () => {
+        console.log('🔴 User Data Stream Closed. Reconnecting in 10s...');
+        setTimeout(connectWS, 10000);
+    });
+
+    ws.on('error', (err) => {
+        console.error('❌ WS Error:', err.message);
+        if (err.message.includes('418')) {
+            console.error('🚫 IP Banned (418). Cooling down for 60s...');
+            setTimeout(connectWS, 60000);
+        }
+    });
+}
+
+// 🔹 Step 4: 24h Mini-Ticker Stream (replaces per-symbol REST /api/v3/ticker/24hr)
+//
+// The !miniTicker@arr stream pushes a snapshot of every spot pair's 24h
+// rolling stats every second. We unpack and store a per-symbol entry so
+// callers (e.g. server.js refreshAnalysisMetrics) can do a sync map lookup
+// instead of issuing a REST call per symbol.
+//
+// Mini-ticker payload field mapping (Binance docs):
+//   s = symbol           c = close (last) price
+//   o = open price       h = high price
+//   l = low price        v = base asset volume (24h)
+//   q = quote asset volume (24h, USDT for *USDT pairs) ← what we mainly need
+function connectTickerStream() {
+    if (tickerWs) {
+        try { tickerWs.terminate(); } catch (_) {}
+    }
+    const url = 'wss://stream.binance.com:9443/ws/!miniTicker@arr';
+    console.log('[WS] Connecting to 24h mini-ticker stream:', url);
+    tickerWs = new WebSocket(url);
+
+    tickerWs.on('open', () => {
+        console.log('🟢 24h mini-ticker stream connected');
+    });
+
+    tickerWs.on('message', (raw) => {
+        try {
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return;
+            const now = Date.now();
+            for (const t of arr) {
+                if (!t || !t.s) continue;
+                tickerCache.set(t.s, {
+                    lastPrice:   t.c,
+                    quoteVolume: t.q,
+                    openPrice:   t.o,
+                    highPrice:   t.h,
+                    lowPrice:    t.l,
+                    volume:      t.v,
+                    ts: now,
+                });
+            }
+        } catch (err) {
+            // Malformed frames are rare; don't spam the log.
+        }
+    });
+
+    tickerWs.on('close', () => {
+        console.log('🔴 24h mini-ticker stream closed. Reconnecting in 5s...');
+        clearTimeout(tickerReconnectTimer);
+        tickerReconnectTimer = setTimeout(connectTickerStream, 5000);
+    });
+
+    tickerWs.on('error', (err) => {
+        console.error('❌ Mini-ticker WS error:', err.message);
+    });
+}
+
+/**
+ * Synchronously read a cached 24h ticker for a symbol (e.g. "BTCUSDT").
+ * Returns null until the first WS frame arrives (~1 second after start).
+ *
+ * Object shape matches Binance's REST /api/v3/ticker/24hr (subset):
+ *   { lastPrice, quoteVolume, openPrice, highPrice, lowPrice, volume, ts }
+ */
+function getTicker24h(symbol) {
+    if (!symbol) return null;
+    return tickerCache.get(symbol.toUpperCase()) || null;
 }
 
 async function start(socketIo, onExecution = null) {
     io = socketIo;
     executionCallback = onExecution;
     await loadCredentials();
-    
-    refreshOpenOrders();
-    refreshAccountBalances();
 
-    setInterval(refreshOpenOrders, 30000);
-    setInterval(refreshAccountBalances, 60000);
-    
-    // Start Pure Socket Logic
-    connectWsApi();
+    // 24h mini-ticker stream is public — start it before user-data so the
+    // analysis cache has data to read by the time symbols are scored.
+    connectTickerStream();
+
+    const key = await createListenKey();
+    if (key) {
+        connectWS();
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = setInterval(keepAlive, 25 * 60 * 1000);
+    }
 }
 
-module.exports = { start, binanceFetch };
+module.exports = { start, getTicker24h };

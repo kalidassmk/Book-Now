@@ -143,6 +143,11 @@ public class BookNowRepositoryImpl implements BookNowRepository {
     }
 
     @Override
+    public CurrentPrice getCurrentPrice(String key, String symbol) {
+        return (CurrentPrice) redisTemplateCurrentPrice.opsForHash().get(key, symbol);
+    }
+
+    @Override
     public Map<String, RollingWindowTicker1HResponse> getAllRWBasePrice(String key) {
         return redisTemplateRWTicker1HResponse.opsForHash().entries(key);
 
